@@ -1,42 +1,38 @@
-﻿using ModernWpf;
+using Ink_Canvas.Helpers;
+using iNKORE.UI.WPF.Modern;
+using iNKORE.UI.WPF.Modern.Helpers;
+using IWshRuntimeLibrary;
+using Microsoft.Office.Interop.PowerPoint;
+using Microsoft.VisualBasic;
+using Microsoft.Win32;
+using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
-using System.Text;
+using System.Net;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Timers;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Ink;
 using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
-using Microsoft.Office.Interop.PowerPoint;
-using System.Runtime.InteropServices;
-using Application = System.Windows.Application;
-using System.Timers;
-using System.Threading;
-using Timer = System.Timers.Timer;
-using System.Diagnostics;
-using Newtonsoft.Json;
-using IWshRuntimeLibrary;
-using File = System.IO.File;
-using System.Collections.ObjectModel;
-using System.Net;
-using Microsoft.VisualBasic;
-using System.Reflection;
-using System.Collections.Generic;
-using Point = System.Windows.Point;
 using System.Windows.Input.StylusPlugIns;
-using MessageBox = System.Windows.MessageBox;
-using System.Drawing.Imaging;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Ink.AnalysisCore;
-using Ink_Canvas.Helpers;
-using Microsoft.Win32;
+using System.Windows.Threading;
+using Application = System.Windows.Application;
+using File = System.IO.File;
+using MessageBox = System.Windows.MessageBox;
+using Path = System.IO.Path;
+using Point = System.Windows.Point;
+using Timer = System.Timers.Timer;
 
 namespace Ink_Canvas
 {
@@ -51,7 +47,7 @@ namespace Ink_Canvas
         {
             InitializeComponent();
 
-
+            BorderSettings.Opacity = 0;
             BorderSettings.Visibility = Visibility.Collapsed;
             StackPanelToolButtons.Visibility = Visibility.Collapsed;
             BorderDrawShape.Visibility = Visibility.Collapsed;
@@ -85,6 +81,11 @@ namespace Ink_Canvas
             if (File.Exists("debug.ini")) Label.Visibility = Visibility.Visible;
 
             InitTimers();
+            timeMachine.OnRedoStateChanged += TimeMachine_OnRedoStateChanged;
+            timeMachine.OnUndoStateChanged += TimeMachine_OnUndoStateChanged;
+            inkCanvas.Strokes.StrokesChanged += StrokesOnStrokesChanged;
+
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
         }
 
         #endregion
@@ -107,6 +108,7 @@ namespace Ink_Canvas
         {
             try
             {
+                // 希沃相关： easinote swenserver RemoteProcess EasiNote.MediaHttpService smartnote.cloud EasiUpdate smartnote EasiUpdate3 EasiUpdate3Protect SeewoP2P CefSharp.BrowserSubprocess SeewoUploadService
                 string arg = "/F";
                 if (Settings.Automation.IsAutoKillPptService)
                 {
@@ -115,6 +117,12 @@ namespace Ink_Canvas
                     {
                         arg += " /IM PPTService.exe";
                     }
+                    processes = Process.GetProcessesByName("SeewoIwbAssistant");
+                    if (processes.Length > 0)
+                    {
+                        arg += " /IM SeewoIwbAssistant.exe" +
+                            " /IM Sia.Guard.exe";
+                    }
                 }
                 if (Settings.Automation.IsAutoKillEasiNote)
                 {
@@ -122,7 +130,7 @@ namespace Ink_Canvas
                     if (processes.Length > 0)
                     {
                         arg += " /IM EasiNote.exe";
-                        
+
                     }
                 }
                 if (arg != "/F")
@@ -134,7 +142,7 @@ namespace Ink_Canvas
 
                     if (arg.Contains("EasiNote"))
                     {
-                        
+
                         BtnSwitch_Click(BtnSwitch, null);
                         MessageBox.Show("“希沃白板 5”已自动关闭");
                     }
@@ -147,16 +155,15 @@ namespace Ink_Canvas
 
         #region Ink Canvas Functions
 
-        Color Ink_DefaultColor = Colors.Red;
-
         DrawingAttributes drawingAttributes;
         private void loadPenCanvas()
         {
+            SetColors();
             try
             {
                 //drawingAttributes = new DrawingAttributes();
                 drawingAttributes = inkCanvas.DefaultDrawingAttributes;
-                drawingAttributes.Color = Ink_DefaultColor;
+                drawingAttributes.Color = ((SolidColorBrush)BtnColorRed.Background).Color;
 
                 drawingAttributes.Height = 2.5;
                 drawingAttributes.Width = 2.5;
@@ -166,7 +173,6 @@ namespace Ink_Canvas
             }
             catch { }
         }
-
         //ApplicationGesture lastApplicationGesture = ApplicationGesture.AllGestures;
         DateTime lastGestureTime = DateTime.Now;
         private void InkCanvas_Gesture(object sender, InkCanvasGestureEventArgs e)
@@ -192,22 +198,35 @@ namespace Ink_Canvas
             }
             catch { }
         }
+
         private void inkCanvas_EditingModeChanged(object sender, RoutedEventArgs e)
         {
+            var inkCanvas1 = sender as InkCanvas;
+            if (inkCanvas1 == null) return;
             if (Settings.Canvas.IsShowCursor)
             {
-                if (((InkCanvas)sender).EditingMode == InkCanvasEditingMode.Ink || drawingShapeMode != 0)
+                if (inkCanvas1.EditingMode == InkCanvasEditingMode.Ink || drawingShapeMode != 0)
                 {
-                    ((InkCanvas)sender).ForceCursor = true;
+                    inkCanvas1.ForceCursor = true;
                 }
                 else
                 {
-                    ((InkCanvas)sender).ForceCursor = false;
+                    inkCanvas1.ForceCursor = false;
                 }
             }
             else
             {
-                ((InkCanvas)sender).ForceCursor = false;
+                inkCanvas1.ForceCursor = false;
+            }
+            if (inkCanvas1.EditingMode == InkCanvasEditingMode.Ink) forcePointEraser = !forcePointEraser;
+
+            if (inkCanvas.EditingMode == InkCanvasEditingMode.Select)
+            {
+                SymbolIconSelect.Foreground = new SolidColorBrush(Color.FromRgb(0, 136, 255));
+            }
+            else
+            {
+                SymbolIconSelect.Foreground = new SolidColorBrush(FloatBarForegroundColor);
             }
         }
 
@@ -217,8 +236,8 @@ namespace Ink_Canvas
 
         private void Window_MouseWheel(object sender, MouseWheelEventArgs e)
         {
-	    if (StackPanelPPTControls.Visibility != Visibility.Visible || currentMode != 0) return;
-	    if (e.Delta >= 120)
+            if (StackPanelPPTControls.Visibility != Visibility.Visible || currentMode != 0) return;
+            if (e.Delta >= 120)
             {
                 BtnPPTSlidesUp_Click(BtnPPTSlidesUp, null);
             }
@@ -232,7 +251,7 @@ namespace Ink_Canvas
         {
             if (StackPanelPPTControls.Visibility != Visibility.Visible || currentMode != 0) return;
 
-            if (e.Key == Key.Down || e.Key == Key.PageDown || e.Key == Key.Right || e.Key == Key.N)
+            if (e.Key == Key.Down || e.Key == Key.PageDown || e.Key == Key.Right || e.Key == Key.N || e.Key == Key.Space)
             {
                 BtnPPTSlidesDown_Click(BtnPPTSlidesDown, null);
             }
@@ -269,7 +288,364 @@ namespace Ink_Canvas
             BtnPPTSlideShowEnd_Click(BtnPPTSlideShowEnd, null);
         }
 
+        private void KeyChangeToDrawTool(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (inkCanvas.Visibility == Visibility.Collapsed)
+            {
+                BtnHideInkCanvas_Click(sender, e);
+            }
+        }
+
+        private void KeyChangeToSelect(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (inkCanvas.Visibility == Visibility.Visible)
+            {
+                BtnHideInkCanvas_Click(sender, e);
+            }
+        }
+
+        private void KeyChangeToEraser(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (ImageEraserMask.Visibility == Visibility.Visible)
+            {
+                BorderPenColorRed_MouseUp(null, null);
+            }
+            else
+            {
+                BtnErase_Click(sender, e);
+            }
+        }
+
+        private void KeyCapture(object sender, ExecutedRoutedEventArgs e)
+        {
+            BtnScreenshot_Click(sender, e);
+        }
+
+        private void KeyDrawLine(object sender, ExecutedRoutedEventArgs e)
+        {
+            SetColorByIndex();
+            BtnDrawLine_Click(lastMouseDownSender, e);
+        }
+
+        private void KeyHide(object sender, ExecutedRoutedEventArgs e)
+        {
+            SymbolIconEmoji_MouseUp(sender, null);
+        }
+
         #endregion Hotkeys
+
+        #region TimeMachine
+
+        private enum CommitReason
+        {
+            UserInput,
+            CodeInput,
+            ShapeDrawing,
+            ShapeRecognition,
+            ClearingCanvas,
+            Manipulation
+        }
+
+        private CommitReason _currentCommitType = CommitReason.UserInput;
+        private bool IsEraseByPoint => inkCanvas.EditingMode == InkCanvasEditingMode.EraseByPoint;
+        private StrokeCollection ReplacedStroke;
+        private StrokeCollection AddedStroke;
+        private StrokeCollection CuboidStrokeCollection;
+        private Dictionary<Stroke, Tuple<StylusPointCollection, StylusPointCollection>> StrokeManipulationHistory;
+        private Dictionary<Stroke, StylusPointCollection> StrokeInitialHistory = new Dictionary<Stroke, StylusPointCollection>();
+        private Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>> DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+        private Dictionary<Guid, List<Stroke>> DrawingAttributesHistoryFlag = new Dictionary<Guid, List<Stroke>>()
+        {
+            { DrawingAttributeIds.Color, new List<Stroke>() },
+            { DrawingAttributeIds.DrawingFlags, new List<Stroke>() },
+            { DrawingAttributeIds.IsHighlighter, new List<Stroke>() },
+            { DrawingAttributeIds.StylusHeight, new List<Stroke>() },
+            { DrawingAttributeIds.StylusTip, new List<Stroke>() },
+            { DrawingAttributeIds.StylusTipTransform, new List<Stroke>() },
+            { DrawingAttributeIds.StylusWidth, new List<Stroke>() }
+        };
+        private TimeMachine timeMachine = new TimeMachine();
+
+        private void ApplyHistoryToCanvas(TimeMachineHistory item)
+        {
+            _currentCommitType = CommitReason.CodeInput;
+            if (item.CommitType == TimeMachineHistoryType.UserInput)
+            {
+                if (!item.StrokeHasBeenCleared)
+                {
+                    foreach (var strokes in item.CurrentStroke)
+                    {
+                        if (!inkCanvas.Strokes.Contains(strokes))
+                            inkCanvas.Strokes.Add(strokes);
+                    }
+                }
+                else
+                {
+                    foreach (var strokes in item.CurrentStroke)
+                    {
+                        if (inkCanvas.Strokes.Contains(strokes))
+                            inkCanvas.Strokes.Remove(strokes);
+                    }
+                }
+            }
+            else if (item.CommitType == TimeMachineHistoryType.ShapeRecognition)
+            {
+                if (item.StrokeHasBeenCleared)
+                {
+
+                    foreach (var strokes in item.CurrentStroke)
+                    {
+                        if (inkCanvas.Strokes.Contains(strokes))
+                            inkCanvas.Strokes.Remove(strokes);
+                    }
+                    foreach (var strokes in item.ReplacedStroke)
+                    {
+                        if (!inkCanvas.Strokes.Contains(strokes))
+                            inkCanvas.Strokes.Add(strokes);
+                    }
+                }
+                else
+                {
+                    foreach (var strokes in item.CurrentStroke)
+                    {
+                        if (!inkCanvas.Strokes.Contains(strokes))
+                            inkCanvas.Strokes.Add(strokes);
+                    }
+                    foreach (var strokes in item.ReplacedStroke)
+                    {
+                        if (inkCanvas.Strokes.Contains(strokes))
+                            inkCanvas.Strokes.Remove(strokes);
+                    }
+                }
+            }
+            else if (item.CommitType == TimeMachineHistoryType.Manipulation)
+            {
+                if (!item.StrokeHasBeenCleared)
+                {
+                    foreach (var currentStroke in item.StylusPointDictionary)
+                    {
+                        if (inkCanvas.Strokes.Contains(currentStroke.Key))
+                        {
+                            currentStroke.Key.StylusPoints = currentStroke.Value.Item2;
+                        }
+                    }
+                }
+                else
+                {
+                    foreach (var currentStroke in item.StylusPointDictionary)
+                    {
+                        if (inkCanvas.Strokes.Contains(currentStroke.Key))
+                        {
+                            currentStroke.Key.StylusPoints = currentStroke.Value.Item1;
+                        }
+                    }
+                }
+            }
+            else if (item.CommitType == TimeMachineHistoryType.DrawingAttributes)
+            {
+                if (!item.StrokeHasBeenCleared)
+                {
+                    foreach (var currentStroke in item.DrawingAttributes)
+                    {
+                        if (inkCanvas.Strokes.Contains(currentStroke.Key))
+                        {
+                            currentStroke.Key.DrawingAttributes = currentStroke.Value.Item2;
+                        }
+                    }
+                }
+                else
+                {
+                    foreach (var currentStroke in item.DrawingAttributes)
+                    {
+                        if (inkCanvas.Strokes.Contains(currentStroke.Key))
+                        {
+                            currentStroke.Key.DrawingAttributes = currentStroke.Value.Item1;
+                        }
+                    }
+                }
+            }
+            else if (item.CommitType == TimeMachineHistoryType.Clear)
+            {
+                if (!item.StrokeHasBeenCleared)
+                {
+                    if (item.CurrentStroke != null)
+                    {
+                        foreach (var currentStroke in item.CurrentStroke)
+                        {
+                            if (!inkCanvas.Strokes.Contains(currentStroke)) inkCanvas.Strokes.Add(currentStroke);
+                        }
+
+                    }
+                    if (item.ReplacedStroke != null)
+                    {
+                        foreach (var replacedStroke in item.ReplacedStroke)
+                        {
+                            if (inkCanvas.Strokes.Contains(replacedStroke)) inkCanvas.Strokes.Remove(replacedStroke);
+                        }
+                    }
+
+                }
+                else
+                {
+                    if (item.ReplacedStroke != null)
+                    {
+                        foreach (var replacedStroke in item.ReplacedStroke)
+                        {
+                            if (!inkCanvas.Strokes.Contains(replacedStroke)) inkCanvas.Strokes.Add(replacedStroke);
+                        }
+                    }
+                    if (item.CurrentStroke != null)
+                    {
+                        foreach (var currentStroke in item.CurrentStroke)
+                        {
+                            if (inkCanvas.Strokes.Contains(currentStroke)) inkCanvas.Strokes.Remove(currentStroke);
+                        }
+                    }
+                }
+            }
+            _currentCommitType = CommitReason.UserInput;
+        }
+
+        private void TimeMachine_OnUndoStateChanged(bool status)
+        {
+            var result = status ? Visibility.Visible : Visibility.Collapsed;
+            BtnUndo.Visibility = result;
+            BtnUndo.IsEnabled = status;
+        }
+
+        private void TimeMachine_OnRedoStateChanged(bool status)
+        {
+            var result = status ? Visibility.Visible : Visibility.Collapsed;
+            BtnRedo.Visibility = result;
+            BtnRedo.IsEnabled = status;
+        }
+
+        private void StrokesOnStrokesChanged(object sender, StrokeCollectionChangedEventArgs e)
+        {
+            foreach (var stroke in e?.Removed)
+            {
+                stroke.StylusPointsChanged -= Stroke_StylusPointsChanged;
+                stroke.StylusPointsReplaced -= Stroke_StylusPointsReplaced;
+                stroke.DrawingAttributesChanged -= Stroke_DrawingAttributesChanged;
+                StrokeInitialHistory.Remove(stroke);
+            }
+            foreach (var stroke in e?.Added)
+            {
+                stroke.StylusPointsChanged += Stroke_StylusPointsChanged;
+                stroke.StylusPointsReplaced += Stroke_StylusPointsReplaced;
+                stroke.DrawingAttributesChanged += Stroke_DrawingAttributesChanged;
+                StrokeInitialHistory[stroke] = stroke.StylusPoints.Clone();
+            }
+            if (_currentCommitType == CommitReason.CodeInput || _currentCommitType == CommitReason.ShapeDrawing) return;
+            if ((e.Added.Count != 0 || e.Removed.Count != 0) && IsEraseByPoint)
+            {
+                if (AddedStroke == null) AddedStroke = new StrokeCollection();
+                if (ReplacedStroke == null) ReplacedStroke = new StrokeCollection();
+                AddedStroke.Add(e.Added);
+                ReplacedStroke.Add(e.Removed);
+                return;
+            }
+            if (e.Added.Count != 0)
+            {
+                if (_currentCommitType == CommitReason.ShapeRecognition)
+                {
+                    timeMachine.CommitStrokeShapeHistory(ReplacedStroke, e.Added);
+                    ReplacedStroke = null;
+                    return;
+                }
+                else
+                {
+                    timeMachine.CommitStrokeUserInputHistory(e.Added);
+                    return;
+                }
+            }
+
+            if (e.Removed.Count != 0)
+            {
+                if (_currentCommitType == CommitReason.ShapeRecognition)
+                {
+                    ReplacedStroke = e.Removed;
+                    return;
+                }
+                else if (!IsEraseByPoint || _currentCommitType == CommitReason.ClearingCanvas)
+                {
+                    timeMachine.CommitStrokeEraseHistory(e.Removed);
+                    return;
+                }
+            }
+        }
+
+        private void Stroke_DrawingAttributesChanged(object sender, PropertyDataChangedEventArgs e)
+        {
+            var key = sender as Stroke;
+            var currentValue = key.DrawingAttributes.Clone();
+            DrawingAttributesHistory.TryGetValue(key, out var previousTuple);
+            var previousValue = previousTuple?.Item1 ?? currentValue.Clone();
+            var needUpdateValue = !DrawingAttributesHistoryFlag[e.PropertyGuid].Contains(key);
+            if (needUpdateValue)
+            {
+                DrawingAttributesHistoryFlag[e.PropertyGuid].Add(key);
+                Debug.Write(e.PreviousValue.ToString());
+            }
+            if (e.PropertyGuid == DrawingAttributeIds.Color && needUpdateValue)
+            {
+                previousValue.Color = (Color)e.PreviousValue;
+            }
+            if (e.PropertyGuid == DrawingAttributeIds.IsHighlighter && needUpdateValue)
+            {
+                previousValue.IsHighlighter = (bool)e.PreviousValue;
+
+            }
+            if (e.PropertyGuid == DrawingAttributeIds.StylusHeight && needUpdateValue)
+            {
+                previousValue.Height = (double)e.PreviousValue;
+            }
+            if (e.PropertyGuid == DrawingAttributeIds.StylusWidth && needUpdateValue)
+            {
+                previousValue.Width = (double)e.PreviousValue;
+            }
+            if (e.PropertyGuid == DrawingAttributeIds.StylusTip && needUpdateValue)
+            {
+                previousValue.StylusTip = (StylusTip)e.PreviousValue;
+            }
+            if (e.PropertyGuid == DrawingAttributeIds.StylusTipTransform && needUpdateValue)
+            {
+                previousValue.StylusTipTransform = (Matrix)e.PreviousValue;
+            }
+            if (e.PropertyGuid == DrawingAttributeIds.DrawingFlags && needUpdateValue)
+            {
+                previousValue.IgnorePressure = (bool)e.PreviousValue;
+            }
+            DrawingAttributesHistory[key] = new Tuple<DrawingAttributes, DrawingAttributes>(previousValue, currentValue);
+        }
+
+        private void Stroke_StylusPointsReplaced(object sender, StylusPointsReplacedEventArgs e)
+        {
+            StrokeInitialHistory[sender as Stroke] = e.NewStylusPoints.Clone();
+        }
+
+        private void Stroke_StylusPointsChanged(object sender, EventArgs e)
+        {
+            var selectedStrokes = inkCanvas.GetSelectedStrokes();
+            var count = selectedStrokes.Count;
+            if (count == 0) count = inkCanvas.Strokes.Count;
+            if (StrokeManipulationHistory == null)
+            {
+                StrokeManipulationHistory = new Dictionary<Stroke, Tuple<StylusPointCollection, StylusPointCollection>>();
+            }
+            StrokeManipulationHistory[sender as Stroke] =
+                new Tuple<StylusPointCollection, StylusPointCollection>(StrokeInitialHistory[sender as Stroke], (sender as Stroke).StylusPoints.Clone());
+            if ((StrokeManipulationHistory.Count == count || sender == null) && dec.Count == 0)
+            {
+                timeMachine.CommitStrokeManipulationHistory(StrokeManipulationHistory);
+                foreach (var item in StrokeManipulationHistory)
+                {
+                    StrokeInitialHistory[item.Key] = item.Value.Item2;
+                }
+                StrokeManipulationHistory = null;
+            }
+        }
+        #endregion
 
         #region Definations and Loading
 
@@ -325,7 +701,7 @@ namespace Ink_Canvas
                         TextBlockVersion.Text = version.ToString();
 
                         string lastVersion = "";
-                        if (response.Contains("Special Version") && !File.Exists(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + "Versions.ini"))
+                        if (response.Contains("Special Version") && !File.Exists(App.RootPath + "Versions.ini"))
                         {
                             LogHelper.WriteLogToFile("Welcome Window Show Dialog", LogHelper.LogType.Event);
 
@@ -339,7 +715,7 @@ namespace Ink_Canvas
                         {
                             try
                             {
-                                lastVersion = File.ReadAllText(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + "Versions.ini");
+                                lastVersion = File.ReadAllText(App.RootPath + "Versions.ini");
                             }
                             catch { }
                             if (response.Contains("Special Version") && !lastVersion.Contains("NewWelcomeConfigured"))
@@ -354,58 +730,15 @@ namespace Ink_Canvas
                             }
                             try
                             {
-                                lastVersion = File.ReadAllText(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + "Versions.ini");
+                                lastVersion = File.ReadAllText(App.RootPath + "Versions.ini");
                             }
                             catch { }
                             if (!lastVersion.Contains(version.ToString()))
                             {
-                                LogHelper.WriteLogToFile("Change Log Window Show Dialog", LogHelper.LogType.Event);
+                                //LogHelper.WriteLogToFile("Change Log Window Show Dialog", LogHelper.LogType.Event);
                                 //new ChangeLogWindow().ShowDialog();
                                 lastVersion += "\n" + version.ToString();
-                                File.WriteAllText(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + "Versions.ini", lastVersion.Trim());
-                            }
-
-                            //第二次启动时才可以进入检查版本更新模式
-                            if (response.Contains("Special Version") || response.Contains("AutoUpdateOnly"))
-                            {
-                                new Thread(new ThreadStart(() =>
-                                {
-                                    try
-                                    {
-                                        if (response.Contains("<update>"))
-                                        {
-                                            string str = Strings.Mid(response, response.IndexOf("<update>") + 9);
-                                            if (str.Contains("<update>"))
-                                            {
-                                                str = Strings.Left(str, str.IndexOf("<update>")).Trim();
-                                                if (str.Length > 0)
-                                                {
-                                                    //string updateIP;
-                                                    //int updatePort;
-
-                                                    //string[] vs = str.Split(':');
-                                                    //updateIP = vs[0];
-                                                    //updatePort = int.Parse(vs[1]);
-
-                                                    //if (OAUS.Core.VersionHelper.HasNewVersion(GetIp(updateIP), updatePort))
-                                                    //{
-                                                    //    string updateExePath = AppDomain.CurrentDomain.BaseDirectory + "AutoUpdater\\AutoUpdater.exe";
-                                                    //    System.Diagnostics.Process myProcess = System.Diagnostics.Process.Start(updateExePath);
-
-                                                    //    LogHelper.WriteLogToFile("Detected new version, closing Ink Canvas for update", LogHelper.LogType.Event);
-
-                                                    //    Application.Current.Dispatcher.Invoke(() =>
-                                                    //    {
-                                                    //        closeIsFromButton = true;
-                                                    //        Application.Current.Shutdown();
-                                                    //    });
-                                                    //}
-                                                }
-                                            }
-                                        }
-                                    }
-                                    catch { }
-                                })).Start();
+                                File.WriteAllText(App.RootPath + "Versions.ini", lastVersion.Trim());
                             }
                         }
                     });
@@ -417,11 +750,19 @@ namespace Ink_Canvas
 
             //加载设置
             LoadSettings();
+            if (Environment.Is64BitProcess)
+            {
+                GroupBoxInkRecognition.Visibility = Visibility.Collapsed;
+            }
 
             ThemeManager.Current.ApplicationTheme = ApplicationTheme.Light;
+            SystemEvents_UserPreferenceChanged(null, null);
 
             TextBlockVersion.Text = Assembly.GetExecutingAssembly().GetName().Version.ToString();
             LogHelper.WriteLogToFile("Ink Canvas Loaded", LogHelper.LogType.Event);
+
+            PreloadIALibrary();
+
             isLoaded = true;
         }
 
@@ -453,13 +794,30 @@ namespace Ink_Canvas
             LogHelper.WriteLogToFile("Ink Canvas closed", LogHelper.LogType.Event);
         }
 
+        private static void PreloadIALibrary()
+        {
+            GC.KeepAlive(typeof(InkAnalyzer));
+            GC.KeepAlive(typeof(AnalysisAlternate));
+            GC.KeepAlive(typeof(InkDrawingNode));
+            var analyzer = new InkAnalyzer();
+            analyzer.AddStrokes(new StrokeCollection() {
+                new Stroke(new StylusPointCollection() {
+                    new StylusPoint(114,514),
+                    new StylusPoint(191,9810),
+                    new StylusPoint(7,21),
+                    new StylusPoint(123,789),
+                })
+            });
+            analyzer.Analyze();
+        }
+
         private void LoadSettings(bool isStartup = true)
         {
-            if (File.Exists(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + settingsFileName))
+            if (File.Exists(App.RootPath + settingsFileName))
             {
                 try
                 {
-                    string text = File.ReadAllText(settingsFileName);
+                    string text = File.ReadAllText(App.RootPath + settingsFileName);
                     Settings = JsonConvert.DeserializeObject<Settings>(text);
                 }
                 catch { }
@@ -512,6 +870,12 @@ namespace Ink_Canvas
                 BtnExit.Visibility = Visibility.Collapsed;
                 ToggleSwitchShowButtonExit.IsOn = false;
             }
+
+            PptNavigationBtn.Visibility =
+                Settings.PowerPointSettings.IsShowPPTNavigation ? Visibility.Visible : Visibility.Collapsed;
+            ToggleSwitchShowButtonPPTNavigation.IsOn = Settings.PowerPointSettings.IsShowPPTNavigation;
+
+            ComboBoxTheme.SelectedIndex = Settings.Appearance.Theme;
             if (Settings.Appearance.IsShowHideControlButton)
             {
                 BtnHideControl.Visibility = Visibility.Visible;
@@ -560,7 +924,7 @@ namespace Ink_Canvas
                 }
             }
 
-            if (Settings.Behavior.PowerPointSupport)
+            if (Settings.PowerPointSettings.PowerPointSupport)
             {
                 ToggleSwitchSupportPowerPoint.IsOn = true;
                 timerCheckPPT.Start();
@@ -570,7 +934,7 @@ namespace Ink_Canvas
                 ToggleSwitchSupportPowerPoint.IsOn = false;
                 timerCheckPPT.Stop();
             }
-            if (Settings.Behavior.IsShowCanvasAtNewSlideShow)
+            if (Settings.PowerPointSettings.IsShowCanvasAtNewSlideShow)
             {
                 ToggleSwitchShowCanvasAtNewSlideShow.IsOn = true;
             }
@@ -583,6 +947,18 @@ namespace Ink_Canvas
             {
                 Settings.Gesture = new Gesture();
             }
+            if (Settings.Gesture.IsDisableLockSmithByDefault)
+            {
+                ToggleSwitchDisableLockSmithByDefault.IsOn = true;
+                _lockSmith = false;
+                LockSmithSymbol.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Pin;
+            }
+            else
+            {
+                ToggleSwitchDisableLockSmithByDefault.IsOn = false;
+                _lockSmith = true;
+                LockSmithSymbol.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.UnPin;
+            }
             if (Settings.Gesture.IsEnableTwoFingerZoom)
             {
                 ToggleSwitchEnableTwoFingerZoom.IsOn = true;
@@ -590,6 +966,14 @@ namespace Ink_Canvas
             else
             {
                 ToggleSwitchEnableTwoFingerZoom.IsOn = false;
+            }
+            if (Settings.Gesture.IsEnableTwoFingerTranslate)
+            {
+                ToggleSwitchEnableTwoFingerTranslate.IsOn = true;
+            }
+            else
+            {
+                ToggleSwitchEnableTwoFingerTranslate.IsOn = false;
             }
             if (Settings.Gesture.IsEnableTwoFingerRotation)
             {
@@ -607,7 +991,7 @@ namespace Ink_Canvas
             {
                 ToggleSwitchEnableTwoFingerRotationOnSelection.IsOn = false;
             }
-            if (Settings.Gesture.IsEnableTwoFingerGestureInPresentationMode)
+            if (Settings.PowerPointSettings.IsEnableTwoFingerGestureInPresentationMode)
             {
                 ToggleSwitchEnableTwoFingerGestureInPresentationMode.IsOn = true;
             }
@@ -615,7 +999,7 @@ namespace Ink_Canvas
             {
                 ToggleSwitchEnableTwoFingerGestureInPresentationMode.IsOn = false;
             }
-            if (Settings.Gesture.IsEnableFingerGestureSlideShowControl)
+            if (Settings.PowerPointSettings.IsEnableFingerGestureSlideShowControl)
             {
                 ToggleSwitchEnableFingerGestureSlideShowControl.IsOn = true;
             }
@@ -650,6 +1034,8 @@ namespace Ink_Canvas
                 ComboBoxPenStyle.SelectedIndex = Settings.Canvas.InkStyle;
 
                 ComboBoxEraserSize.SelectedIndex = Settings.Canvas.EraserSize;
+
+                ComboBoxHyperbolaAsymptoteOption.SelectedIndex = (int)Settings.Canvas.HyperbolaAsymptoteOption;
             }
             else
             {
@@ -676,6 +1062,27 @@ namespace Ink_Canvas
                     ToggleSwitchAutoKillEasiNote.IsOn = false;
                 }
 
+                if (Settings.Automation.IsAutoClearWhenExitingWritingMode)
+                {
+                    ToggleSwitchClearExitingWritingMode.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchClearExitingWritingMode.IsOn = false;
+                }
+
+
+                if (Settings.Automation.IsAutoSaveStrokesAtClear)
+                {
+                    ToggleSwitchAutoSaveStrokesAtClear.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchAutoSaveStrokesAtClear.IsOn = false;
+                }
+
+
+
                 if (Settings.Automation.IsAutoKillPptService)
                 {
                     ToggleSwitchAutoKillPptService.IsOn = true;
@@ -683,6 +1090,15 @@ namespace Ink_Canvas
                 else
                 {
                     ToggleSwitchAutoKillPptService.IsOn = false;
+                }
+
+                if (Settings.Automation.IsSaveScreenshotsInDateFolders)
+                {
+                    ToggleSwitchSaveScreenshotsInDateFolders.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchSaveScreenshotsInDateFolders.IsOn = false;
                 }
 
                 if (Settings.Automation.IsAutoSaveStrokesAtScreenshot)
@@ -694,13 +1110,104 @@ namespace Ink_Canvas
                     ToggleSwitchAutoSaveStrokesAtScreenshot.IsOn = false;
                 }
 
-                if (Settings.Automation.IsAutoSaveStrokesInPowerPoint)
+                if (Settings.PowerPointSettings.IsAutoSaveStrokesInPowerPoint)
                 {
                     ToggleSwitchAutoSaveStrokesInPowerPoint.IsOn = true;
                 }
                 else
                 {
                     ToggleSwitchAutoSaveStrokesInPowerPoint.IsOn = false;
+                }
+
+                if (Settings.PowerPointSettings.IsNotifyPreviousPage)
+                {
+                    ToggleSwitchNotifyPreviousPage.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchNotifyPreviousPage.IsOn = false;
+                }
+
+                if (Settings.PowerPointSettings.IsNotifyHiddenPage)
+                {
+                    ToggleSwitchNotifyHiddenPage.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchNotifyHiddenPage.IsOn = false;
+                }
+
+                if (Settings.PowerPointSettings.IsNoClearStrokeOnSelectWhenInPowerPoint)
+                {
+                    ToggleSwitchNoStrokeClearInPowerPoint.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchNoStrokeClearInPowerPoint.IsOn = false;
+                }
+
+                if (Settings.PowerPointSettings.IsShowStrokeOnSelectInPowerPoint)
+                {
+                    ToggleSwitchShowStrokeOnSelectInPowerPoint.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchShowStrokeOnSelectInPowerPoint.IsOn = false;
+                }
+
+                if (Settings.PowerPointSettings.IsSupportWPS)
+                {
+                    ToggleSwitchSupportWPS.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchSupportWPS.IsOn = false;
+                }
+
+                SideControlMinimumAutomationSlider.Value = Settings.Automation.MinimumAutomationStrokeNumber;
+
+                if (Settings.Canvas.HideStrokeWhenSelecting)
+                {
+                    ToggleSwitchHideStrokeWhenSelecting.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchHideStrokeWhenSelecting.IsOn = false;
+                }
+
+                if (Settings.Canvas.UsingWhiteboard)
+                {
+                    ToggleSwitchUsingWhiteboard.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchUsingWhiteboard.IsOn = false;
+                }
+                if (Settings.Canvas.UsingWhiteboard)
+                {
+                    BtnSwitchTheme.Content = "深色";
+                    BtnSwitchTheme_Click(null, null);
+                }
+
+                switch (Settings.Canvas.EraserType)
+                {
+                    case 1:
+                        forcePointEraser = true;
+                        break;
+                    case 2:
+                        forcePointEraser = false;
+                        break;
+                }
+
+                ComboBoxEraserType.SelectedIndex = Settings.Canvas.EraserType;
+
+                if (Settings.PowerPointSettings.IsAutoSaveScreenShotInPowerPoint)
+                {
+                    ToggleSwitchAutoSaveScreenShotInPowerPoint.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchAutoSaveScreenShotInPowerPoint.IsOn = false;
                 }
             }
             else
@@ -710,14 +1217,7 @@ namespace Ink_Canvas
 
             if (Settings.Advanced != null)
             {
-                if (Settings.Advanced.IsSpecialScreen)
-                {
-                    ToggleSwitchIsSpecialScreen.IsOn = true;
-                }
-                else
-                {
-                    ToggleSwitchIsSpecialScreen.IsOn = false;
-                }
+                TouchMultiplierSlider.Value = Settings.Advanced.TouchMultiplier;
                 if (Settings.Advanced.IsLogEnabled)
                 {
                     ToggleSwitchIsLogEnabled.IsOn = true;
@@ -726,8 +1226,28 @@ namespace Ink_Canvas
                 {
                     ToggleSwitchIsLogEnabled.IsOn = false;
                 }
+                if (Settings.Advanced.EraserBindTouchMultiplier)
+                {
+                    ToggleSwitchEraserBindTouchMultiplier.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchEraserBindTouchMultiplier.IsOn = false;
+                }
+
+                if (Settings.Advanced.IsSpecialScreen)
+                {
+                    ToggleSwitchIsSpecialScreen.IsOn = true;
+                }
+                else
+                {
+                    ToggleSwitchIsSpecialScreen.IsOn = false;
+                }
+                TouchMultiplierSlider.Visibility = ToggleSwitchIsSpecialScreen.IsOn ? Visibility.Visible : Visibility.Collapsed;
+
+                ToggleSwitchIsQuadIR.IsOn = Settings.Advanced.IsQuadIR;
             }
-            else 
+            else
             {
                 Settings.Advanced = new Advanced();
             }
@@ -750,7 +1270,7 @@ namespace Ink_Canvas
         }
 
         #endregion Definations and Loading
-        
+
         #region Right Side Panel
 
         public static bool CloseIsFromButton = false;
@@ -768,14 +1288,23 @@ namespace Ink_Canvas
             Application.Current.Shutdown();
         }
 
-        private void BtnSettings_Click(object sender, RoutedEventArgs e)
+        private async void BtnSettings_Click(object sender, RoutedEventArgs e)
         {
-            if (BorderSettings.Visibility == Visibility.Visible)
+            if (BorderSettings.Tag as Visibility? == Visibility.Visible)
             {
+                BorderSettings.Tag = Visibility.Collapsed;
+                BorderSettings.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(50)));
+                await Task.Delay(60);
                 BorderSettings.Visibility = Visibility.Collapsed;
             }
             else
             {
+                BorderSettings.Tag = Visibility.Visible;
+                BorderSettings.Visibility = Visibility.Visible;
+                BorderSettings.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(150)));
+
+                // 不要问为什么
+                await Task.Delay(160);
                 BorderSettings.Visibility = Visibility.Visible;
             }
         }
@@ -790,9 +1319,24 @@ namespace Ink_Canvas
         private void BtnErase_Click(object sender, RoutedEventArgs e)
         {
             forceEraser = true;
-            inkCanvas.EditingMode = InkCanvasEditingMode.EraseByStroke;
-            inkCanvas.EraserShape = new EllipseStylusShape(5, 5);
+            forcePointEraser = !forcePointEraser;
+            switch (Settings.Canvas.EraserType)
+            {
+                case 1:
+                    forcePointEraser = true;
+                    break;
+                case 2:
+                    forcePointEraser = false;
+                    break;
+            }
+            inkCanvas.EraserShape = forcePointEraser ? new EllipseStylusShape(50, 50) : new EllipseStylusShape(5, 5);
+            inkCanvas.EditingMode =
+                forcePointEraser ? InkCanvasEditingMode.EraseByPoint : InkCanvasEditingMode.EraseByStroke;
             drawingShapeMode = 0;
+            GeometryDrawingEraser.Brush = forcePointEraser
+                ? new SolidColorBrush(Color.FromRgb(0x23, 0xA9, 0xF2))
+                : new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66));
+            ImageEraser.Visibility = Visibility.Collapsed;
             inkCanvas_EditingModeChanged(inkCanvas, null);
             CancelSingleFingerDragMode();
         }
@@ -802,6 +1346,21 @@ namespace Ink_Canvas
             forceEraser = false;
             BorderClearInDelete.Visibility = Visibility.Collapsed;
 
+            if (currentMode == 0)
+            {
+                BorderPenColorRed_MouseUp(BorderPenColorRed, null);
+            }
+            else
+            {
+                if (Settings.Canvas.UsingWhiteboard)
+                {
+                    BorderPenColorBlack_MouseUp(BorderPenColorBlack, null);
+                }
+                else
+                {
+                    BorderPenColorWhite_MouseUp(BorderPenColorWhite, null);
+                }
+            }
             if (inkCanvas.Strokes.Count != 0)
             {
                 int whiteboardIndex = CurrentWhiteboardIndex;
@@ -811,14 +1370,9 @@ namespace Ink_Canvas
                 }
                 strokeCollections[whiteboardIndex] = inkCanvas.Strokes.Clone();
 
-                BtnUndo.IsEnabled = true;
-                BtnUndo.Visibility = Visibility.Visible;
-
-                BtnRedo.IsEnabled = false;
-                BtnRedo.Visibility = Visibility.Collapsed;
             }
 
-            inkCanvas.Strokes.Clear();
+            ClearStrokes(false);
             inkCanvas.Children.Clear();
 
             CancelSingleFingerDragMode();
@@ -868,7 +1422,7 @@ namespace Ink_Canvas
                     GridBackgroundCover.Visibility = Visibility.Collapsed;
 
                     SaveStrokes(true);
-                    inkCanvas.Strokes.Clear();
+                    ClearStrokes(true);
                     RestoreStrokes();
 
                     if (BtnSwitchTheme.Content.ToString() == "浅色")
@@ -894,6 +1448,7 @@ namespace Ink_Canvas
                     }
                     StackPanelPPTButtons.Visibility = Visibility.Visible;
                 }
+                Topmost = true;
                 BtnHideInkCanvas_Click(BtnHideInkCanvas, e);
             }
             else
@@ -905,7 +1460,7 @@ namespace Ink_Canvas
                         GridBackgroundCover.Visibility = Visibility.Collapsed;
 
                         SaveStrokes();
-                        inkCanvas.Strokes.Clear();
+                        ClearStrokes(true);
                         RestoreStrokes(true);
 
                         if (BtnSwitchTheme.Content.ToString() == "浅色")
@@ -931,14 +1486,16 @@ namespace Ink_Canvas
                                 ThemeManager.Current.ApplicationTheme = ApplicationTheme.Light;
                             }
                         }
+
                         StackPanelPPTButtons.Visibility = Visibility.Visible;
+                        Topmost = true;
                         break;
                     case 1: //黑板或白板模式
                         currentMode = 1;
                         GridBackgroundCover.Visibility = Visibility.Visible;
 
                         SaveStrokes(true);
-                        inkCanvas.Strokes.Clear();
+                        ClearStrokes(true);
                         RestoreStrokes();
 
                         BtnSwitch.Content = "屏幕";
@@ -954,16 +1511,12 @@ namespace Ink_Canvas
                             SymbolIconBtnColorBlackContent.Foreground = Brushes.White;
                             ThemeManager.Current.ApplicationTheme = ApplicationTheme.Light;
                         }
+
                         StackPanelPPTButtons.Visibility = Visibility.Collapsed;
+                        Topmost = false;
                         break;
                 }
             }
-
-            BtnUndo.IsEnabled = false;
-            BtnUndo.Visibility = Visibility.Visible;
-
-            BtnRedo.IsEnabled = false;
-            BtnRedo.Visibility = Visibility.Collapsed;
         }
 
         private void BtnSwitchTheme_Click(object sender, RoutedEventArgs e)
@@ -976,25 +1529,8 @@ namespace Ink_Canvas
                     BtnSwitch.Content = "黑板";
                 }
                 BtnExit.Foreground = Brushes.White;
-                GridBackgroundCover.Background = new SolidColorBrush(StringToColor("#FF1A1A1A"));
-                BtnColorBlack.Background = Brushes.White;
-                BtnColorRed.Background = new SolidColorBrush(StringToColor("#FFFF3333"));
-                BtnColorGreen.Background = new SolidColorBrush(StringToColor("#FF1ED760"));
-                BtnColorYellow.Background = new SolidColorBrush(StringToColor("#FFFFC000"));
-                SymbolIconBtnColorBlackContent.Foreground = Brushes.Black;
+                GridBackgroundCover.Background = new SolidColorBrush(StringToColor("#FFF2F2F2"));
                 ThemeManager.Current.ApplicationTheme = ApplicationTheme.Dark;
-                if (inkColor == 0)
-                {
-                    inkCanvas.DefaultDrawingAttributes.Color = Colors.White;
-                }
-                else if (inkColor == 2)
-                {
-                    inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FF1ED760");
-                }
-                else if (inkColor == 4)
-                {
-                    inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FFFFC000");
-                }
             }
             else
             {
@@ -1004,79 +1540,42 @@ namespace Ink_Canvas
                     BtnSwitch.Content = "白板";
                 }
                 BtnExit.Foreground = Brushes.Black;
-                GridBackgroundCover.Background = new SolidColorBrush(StringToColor("#FFF2F2F2"));
-                BtnColorBlack.Background = Brushes.Black;
-                BtnColorRed.Background = Brushes.Red;
-                BtnColorGreen.Background = new SolidColorBrush(StringToColor("#FF169141"));
-                BtnColorYellow.Background = new SolidColorBrush(StringToColor("#FFF38B00"));
-                SymbolIconBtnColorBlackContent.Foreground = Brushes.White;
+                GridBackgroundCover.Background = new SolidColorBrush(StringToColor("#FF1A1A1A"));
                 ThemeManager.Current.ApplicationTheme = ApplicationTheme.Light;
-                if (inkColor == 0)
-                {
-                    inkCanvas.DefaultDrawingAttributes.Color = Colors.Black;
-                }
-                else if (inkColor == 2)
-                {
-                    inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FF169141");
-                }
-                else if (inkColor == 4)
-                {
-                    inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FFF38B00");
-                }
             }
-            AdjustStrokeColor();
+            SetColorByIndex();
             if (!Settings.Appearance.IsTransparentButtonBackground)
             {
                 ToggleSwitchTransparentButtonBackground_Toggled(ToggleSwitchTransparentButtonBackground, null);
             }
         }
-
-        private void AdjustStrokeColor()
+        private void SetColorByIndex()
         {
-            if (BtnSwitchTheme.Content.ToString() == "浅色")
-            {
-                foreach (Stroke stroke in inkCanvas.Strokes)
+            if (currentMode != 0 || GridInkCanvasSelectionCover.Visibility != Visibility.Collapsed)
+                if (inkColor == 0)
                 {
-                    if (stroke.DrawingAttributes.Color == Colors.Black)
-                    {
-                        stroke.DrawingAttributes.Color = Colors.White;
-                    }
-                    else if (stroke.DrawingAttributes.Color == Colors.Red)
-                    {
-                        stroke.DrawingAttributes.Color = StringToColor("#FFFF3333");
-                    }
-                    else if (stroke.DrawingAttributes.Color.Equals(StringToColor("#FF169141")))
-                    {
-                        stroke.DrawingAttributes.Color = StringToColor("#FF1ED760");
-                    }
-                    else if (stroke.DrawingAttributes.Color.Equals(StringToColor("#FFF38B00")))
-                    {
-                        stroke.DrawingAttributes.Color = StringToColor("#FFFFC000");
-                    }
+                    BtnColorBlack_Click(null, null);
                 }
-            }
-            else
-            {
-                foreach (Stroke stroke in inkCanvas.Strokes)
+                else if (inkColor == 1)
                 {
-                    if (stroke.DrawingAttributes.Color == Colors.White)
-                    {
-                        stroke.DrawingAttributes.Color = Colors.Black;
-                    }
-                    else if (stroke.DrawingAttributes.Color.Equals(StringToColor("#FFFF3333")))
-                    {
-                        stroke.DrawingAttributes.Color = Colors.Red;
-                    }
-                    else if (stroke.DrawingAttributes.Color.Equals(StringToColor("#FF1ED760")))
-                    {
-                        stroke.DrawingAttributes.Color = StringToColor("#FF169141");
-                    }
-                    else if (stroke.DrawingAttributes.Color.Equals(StringToColor("#FFFFC000")))
-                    {
-                        stroke.DrawingAttributes.Color = StringToColor("#FFF38B00");
-                    }
+                    BtnColorRed_Click(null, null);
                 }
-            }
+                else if (inkColor == 2)
+                {
+                    BtnColorGreen_Click(null, null);
+                }
+                else if (inkColor == 3)
+                {
+                    BtnColorBlue_Click(null, null);
+                }
+                else if (inkColor == 4)
+                {
+                    BtnColorYellow_Click(null, null);
+                }
+                else if (inkColor == 5)
+                {
+                    BorderPenColorWhite_MouseUp(null, null);
+                }
         }
 
         int BoundsWidth = 5;
@@ -1098,9 +1597,21 @@ namespace Ink_Canvas
             if (Main_Grid.Background == Brushes.Transparent)
             {
                 Main_Grid.Background = new SolidColorBrush(StringToColor("#01FFFFFF"));
-                inkCanvas.Visibility = Visibility.Visible;
+                if (Settings.Canvas.HideStrokeWhenSelecting)
+                {
+                    inkCanvas.Visibility = Visibility.Visible;
+                    inkCanvas.IsHitTestVisible = true;
+                }
+                else
+                {
+                    inkCanvas.IsHitTestVisible = true;
+                    inkCanvas.Visibility = Visibility.Visible;
+                }
                 GridBackgroundCoverHolder.Visibility = Visibility.Visible;
                 GridInkCanvasSelectionCover.Visibility = Visibility.Collapsed;
+
+                if (ImageEraserMask.Visibility == Visibility.Visible)
+                    BtnColorRed_Click(sender, null);
 
                 if (GridBackgroundCover.Visibility == Visibility.Collapsed)
                 {
@@ -1124,14 +1635,79 @@ namespace Ink_Canvas
             }
             else
             {
+
+
+                // Auto-clear Strokes
+                // 很烦, 要重新来, 要等待截图完成再清理笔迹
+                if (BtnPPTSlideShowEnd.Visibility != Visibility.Visible)
+                {
+                    if (isLoaded && Settings.Automation.IsAutoClearWhenExitingWritingMode)
+                    {
+                        if (inkCanvas.Strokes.Count > 0)
+                        {
+                            if (Settings.Automation.IsAutoSaveStrokesAtClear && inkCanvas.Strokes.Count >
+                                Settings.Automation.MinimumAutomationStrokeNumber)
+                            {
+                                SaveScreenShot(true);
+                            }
+
+                            BtnClear_Click(BtnClear, null);
+                        }
+                    }
+                    if (Settings.Canvas.HideStrokeWhenSelecting)
+                        inkCanvas.Visibility = Visibility.Collapsed;
+                    else
+                    {
+                        inkCanvas.IsHitTestVisible = false;
+                        inkCanvas.Visibility = Visibility.Visible;
+                    }
+                }
+                else
+                {
+                    if (isLoaded && Settings.Automation.IsAutoClearWhenExitingWritingMode && !Settings.PowerPointSettings.IsNoClearStrokeOnSelectWhenInPowerPoint)
+                    {
+                        if (inkCanvas.Strokes.Count > 0)
+                        {
+                            if (Settings.Automation.IsAutoSaveStrokesAtClear && inkCanvas.Strokes.Count >
+                                Settings.Automation.MinimumAutomationStrokeNumber)
+                            {
+                                SaveScreenShot(true);
+                            }
+
+                            BtnClear_Click(BtnClear, null);
+                        }
+                    }
+
+
+                    if (Settings.PowerPointSettings.IsShowStrokeOnSelectInPowerPoint)
+                    {
+                        inkCanvas.Visibility = Visibility.Visible;
+                        inkCanvas.IsHitTestVisible = true;
+                    }
+                    else
+                    {
+                        if (Settings.Canvas.HideStrokeWhenSelecting)
+                            inkCanvas.Visibility = Visibility.Collapsed;
+                        else
+                        {
+                            inkCanvas.IsHitTestVisible = false;
+                            inkCanvas.Visibility = Visibility.Visible;
+                        }
+                    }
+                }
+
+
+
                 Main_Grid.Background = Brushes.Transparent;
-                inkCanvas.Visibility = Visibility.Collapsed;
+
+
                 GridBackgroundCoverHolder.Visibility = Visibility.Collapsed;
                 if (currentMode != 0)
                 {
                     SaveStrokes();
                     RestoreStrokes(true);
                 }
+
                 if (BtnSwitchTheme.Content.ToString() == "浅色")
                 {
                     BtnSwitch.Content = "黑板";
@@ -1140,6 +1716,7 @@ namespace Ink_Canvas
                 {
                     BtnSwitch.Content = "白板";
                 }
+
                 StackPanelPPTButtons.Visibility = Visibility.Visible;
                 BtnHideInkCanvas.Content = "显示\n画板";
             }
@@ -1189,8 +1766,12 @@ namespace Ink_Canvas
 
         int inkColor = 1;
 
+        const int ColorSwiftOpacityDurationOn = 150;
+        const int ColorSwiftOpacityDurationOff = 50;
         private void ColorSwitchCheck()
         {
+            //EraserContainer.Background = null;
+            ImageEraser.Visibility = Visibility.Visible;
             if (Main_Grid.Background == Brushes.Transparent)
             {
                 if (currentMode == 1)
@@ -1213,6 +1794,15 @@ namespace Ink_Canvas
                     catch { }
                 }
             }
+            if (DrawingAttributesHistory.Count > 0)
+            {
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
+            }
             else
             {
                 inkCanvas.IsManipulationEnabled = true;
@@ -1220,52 +1810,45 @@ namespace Ink_Canvas
                 inkCanvas.EditingMode = InkCanvasEditingMode.Ink;
                 CancelSingleFingerDragMode();
                 forceEraser = false;
+
+                // 改变选中提示
+                ViewboxBtnColorBlackContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+                ViewboxBtnColorBlueContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+                ViewboxBtnColorGreenContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+                ViewboxBtnColorRedContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+                ViewboxBtnColorYellowContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+                ViewboxBtnColorWhiteContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+                switch (inkColor)
+                {
+                    case 0:
+                        ViewboxBtnColorBlackContent.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOn)));
+                        break;
+                    case 1:
+                        ViewboxBtnColorRedContent.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOn)));
+                        break;
+                    case 2:
+                        ViewboxBtnColorGreenContent.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOn)));
+                        break;
+                    case 3:
+                        ViewboxBtnColorBlueContent.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOn)));
+                        break;
+                    case 4:
+                        ViewboxBtnColorYellowContent.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOn)));
+                        break;
+                    case 5:
+                        ViewboxBtnColorWhiteContent.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOn)));
+                        break;
+                }
             }
 
             isLongPressSelected = false;
-
-            // 改变选中提示
-            ViewboxBtnColorBlackContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorBlueContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorGreenContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorRedContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorYellowContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorWhiteContent.Visibility = Visibility.Collapsed;
-            switch (inkColor)
-            {
-                case 0:
-                    ViewboxBtnColorBlackContent.Visibility = Visibility.Visible;
-                    break;
-                case 1:
-                    ViewboxBtnColorRedContent.Visibility = Visibility.Visible;
-                    break;
-                case 2:
-                    ViewboxBtnColorGreenContent.Visibility = Visibility.Visible;
-                    break;
-                case 3:
-                    ViewboxBtnColorBlueContent.Visibility = Visibility.Visible;
-                    break;
-                case 4:
-                    ViewboxBtnColorYellowContent.Visibility = Visibility.Visible;
-                    break;
-                case 5:
-                    ViewboxBtnColorWhiteContent.Visibility = Visibility.Visible;
-                    break;
-            }
         }
 
         private void BtnColorBlack_Click(object sender, RoutedEventArgs e)
         {
             inkColor = 0;
             forceEraser = false;
-            if (BtnSwitchTheme.Content.ToString() == "浅色")
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = Colors.White;
-            }
-            else
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = Colors.Black;
-            }
+            inkCanvas.DefaultDrawingAttributes.Color = Colors.Black;
 
             ColorSwitchCheck();
         }
@@ -1274,18 +1857,7 @@ namespace Ink_Canvas
         {
             inkColor = 1;
             forceEraser = false;
-            inkCanvas.DefaultDrawingAttributes.Color = Colors.Red;
-            if (BtnSwitchTheme.Content.ToString() == "浅色")
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FFFF3333");
-                BtnColorRed.Background = new SolidColorBrush(StringToColor("#FFFF3333"));
-            }
-            else
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = Colors.Red;
-                BtnColorRed.Background = Brushes.Red;
-            }
-
+            inkCanvas.DefaultDrawingAttributes.Color = ((SolidColorBrush)BtnColorRed.Background).Color;
             ColorSwitchCheck();
         }
 
@@ -1293,17 +1865,7 @@ namespace Ink_Canvas
         {
             inkColor = 2;
             forceEraser = false;
-            if (BtnSwitchTheme.Content.ToString() == "浅色")
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FF1ED760");
-                BtnColorGreen.Background = new SolidColorBrush(StringToColor("#FF1ED760"));
-            }
-            else
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FF169141");
-                BtnColorGreen.Background = new SolidColorBrush(StringToColor("#FF169141"));
-            }
-
+            inkCanvas.DefaultDrawingAttributes.Color = ((SolidColorBrush)BtnColorGreen.Background).Color;
             ColorSwitchCheck();
         }
 
@@ -1311,8 +1873,7 @@ namespace Ink_Canvas
         {
             inkColor = 3;
             forceEraser = false;
-            inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FF239AD6");
-
+            inkCanvas.DefaultDrawingAttributes.Color = ((SolidColorBrush)BtnColorBlue.Background).Color;
             ColorSwitchCheck();
         }
 
@@ -1320,17 +1881,7 @@ namespace Ink_Canvas
         {
             inkColor = 4;
             forceEraser = false;
-            if (BtnSwitchTheme.Content.ToString() == "浅色")
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FFFFC000");
-                BtnColorYellow.Background = new SolidColorBrush(StringToColor("#FFFFC000"));
-            }
-            else
-            {
-                inkCanvas.DefaultDrawingAttributes.Color = StringToColor("#FFF38B00");
-                BtnColorYellow.Background = new SolidColorBrush(StringToColor("#FFF38B00"));
-            }
-
+            inkCanvas.DefaultDrawingAttributes.Color = ((SolidColorBrush)BtnColorYellow.Background).Color;
             ColorSwitchCheck();
         }
 
@@ -1373,7 +1924,7 @@ namespace Ink_Canvas
                 inkCanvas.EditingMode = InkCanvasEditingMode.Ink;
                 inkCanvas.Children.Clear();
                 isInMultiTouchMode = false;
-                SymbolIconMultiTouchMode.Symbol = ModernWpf.Controls.Symbol.People;
+                SymbolIconMultiTouchMode.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.People;
             }
             else
             {
@@ -1385,7 +1936,7 @@ namespace Ink_Canvas
                 inkCanvas.EditingMode = InkCanvasEditingMode.None;
                 inkCanvas.Children.Clear();
                 isInMultiTouchMode = true;
-                SymbolIconMultiTouchMode.Symbol = ModernWpf.Controls.Symbol.Contact;
+                SymbolIconMultiTouchMode.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Contact;
             }
         }
 
@@ -1506,6 +2057,9 @@ namespace Ink_Canvas
 
         Point iniP = new Point(0, 0);
         bool isLastTouchEraser = false;
+        private bool forcePointEraser = true;
+        private bool _lockSmith = false; //临时停用双指手势
+
         private void Main_Grid_TouchDown(object sender, TouchEventArgs e)
         {
             BorderClearInDelete.Visibility = Visibility.Collapsed;
@@ -1523,8 +2077,9 @@ namespace Ink_Canvas
                 MouseTouchMove(iniP);
             }
             inkCanvas.Opacity = 1;
-
             double boundsWidth = GetTouchBoundWidth(e);
+            var eraserMultiplier = 1d;
+            if (!Settings.Advanced.EraserBindTouchMultiplier && Settings.Advanced.IsSpecialScreen) eraserMultiplier = 1 / Settings.Advanced.TouchMultiplier;
             if (boundsWidth > BoundsWidth)
             {
                 isLastTouchEraser = true;
@@ -1547,12 +2102,12 @@ namespace Ink_Canvas
                             k = 1.8;
                             break;
                     }
-                    inkCanvas.EraserShape = new EllipseStylusShape(boundsWidth * 1.5 * k, boundsWidth * 1.5 * k);
+                    inkCanvas.EraserShape = new EllipseStylusShape(boundsWidth * 1.5 * k * eraserMultiplier, boundsWidth * 1.5 * k * eraserMultiplier);
                     inkCanvas.EditingMode = InkCanvasEditingMode.EraseByPoint;
                 }
                 else
                 {
-                    if (StackPanelPPTControls.Visibility == Visibility.Visible && inkCanvas.Strokes.Count == 0 && Settings.Gesture.IsEnableFingerGestureSlideShowControl)
+                    if (StackPanelPPTControls.Visibility == Visibility.Visible && inkCanvas.Strokes.Count == 0 && Settings.PowerPointSettings.IsEnableFingerGestureSlideShowControl)
                     {
                         isLastTouchEraser = false;
                         inkCanvas.EditingMode = InkCanvasEditingMode.GestureOnly;
@@ -1560,9 +2115,11 @@ namespace Ink_Canvas
                     }
                     else
                     {
+                        //inkCanvas.EraserShape = new RectangleStylusShape(8, 8); //old old
+                        //inkCanvas.EraserShape = forcePointEraser ? new EllipseStylusShape(50, 50) : new EllipseStylusShape(5, 5); //last
+                        //inkCanvas.EraserShape = new EllipseStylusShape(boundsWidth * 1.5, boundsWidth * 1.5); //old old
+                        //inkCanvas.EditingMode = forcePointEraser ? InkCanvasEditingMode.EraseByPoint : InkCanvasEditingMode.EraseByStroke; //last
                         inkCanvas.EraserShape = new EllipseStylusShape(5, 5);
-                        //inkCanvas.EraserShape = new RectangleStylusShape(8, 8);
-                        //inkCanvas.EraserShape = new EllipseStylusShape(boundsWidth * 1.5, boundsWidth * 1.5);
                         inkCanvas.EditingMode = InkCanvasEditingMode.EraseByStroke;
                     }
                 }
@@ -1570,7 +2127,7 @@ namespace Ink_Canvas
             else
             {
                 isLastTouchEraser = false;
-                inkCanvas.EraserShape = new EllipseStylusShape(5, 5);
+                inkCanvas.EraserShape = forcePointEraser ? new EllipseStylusShape(50, 50) : new EllipseStylusShape(5, 5);
                 if (forceEraser) return;
                 inkCanvas.EditingMode = InkCanvasEditingMode.Ink;
             }
@@ -1578,8 +2135,11 @@ namespace Ink_Canvas
 
         public double GetTouchBoundWidth(TouchEventArgs e)
         {
-            double value = e.GetTouchPoint(null).Bounds.Width;
-            if (Settings.Advanced.IsSpecialScreen) value /= 3.75;
+            var args = e.GetTouchPoint(null).Bounds;
+            double value;
+            if (!Settings.Advanced.IsQuadIR) value = args.Width;
+            else value = Math.Sqrt(args.Width * args.Height); //四边红外
+            if (Settings.Advanced.IsSpecialScreen) value *= Settings.Advanced.TouchMultiplier;
             return value;
         }
 
@@ -1605,9 +2165,9 @@ namespace Ink_Canvas
                 lastTouchDownStrokeCollection = inkCanvas.Strokes.Clone();
             }
             //设备两个及两个以上，将画笔功能关闭
-            if (dec.Count > 1 || isSingleFingerDragMode || !Settings.Gesture.IsEnableTwoFingerZoom)
+            if (dec.Count > 1 || isSingleFingerDragMode || !Settings.Gesture.IsEnableTwoFingerGesture)
             {
-                if (isInMultiTouchMode || !Settings.Gesture.IsEnableTwoFingerZoom) return;
+                if (isInMultiTouchMode || !Settings.Gesture.IsEnableTwoFingerGesture) return;
                 if (inkCanvas.EditingMode != InkCanvasEditingMode.None && inkCanvas.EditingMode != InkCanvasEditingMode.Select)
                 {
                     lastInkCanvasEditingMode = inkCanvas.EditingMode;
@@ -1639,16 +2199,9 @@ namespace Ink_Canvas
                         whiteboardIndex = 0;
                     }
                     strokeCollections[whiteboardIndex] = lastTouchDownStrokeCollection;
-
-                    BtnUndo.IsEnabled = true;
-                    BtnUndo.Visibility = Visibility.Visible;
-
-                    BtnRedo.IsEnabled = false;
-                    BtnRedo.Visibility = Visibility.Collapsed;
                 }
             }
         }
-
         private void inkCanvas_ManipulationStarting(object sender, ManipulationStartingEventArgs e)
         {
             e.Mode = ManipulationModes.All;
@@ -1670,8 +2223,8 @@ namespace Ink_Canvas
 
         private void Main_Grid_ManipulationDelta(object sender, ManipulationDeltaEventArgs e)
         {
-            if (isInMultiTouchMode || !Settings.Gesture.IsEnableTwoFingerZoom) return;
-            if ((dec.Count >= 2 && (Settings.Gesture.IsEnableTwoFingerGestureInPresentationMode || StackPanelPPTControls.Visibility != Visibility.Visible || StackPanelPPTButtons.Visibility == Visibility.Collapsed)) || isSingleFingerDragMode)
+            if (isInMultiTouchMode || !Settings.Gesture.IsEnableTwoFingerGesture || _lockSmith) return;
+            if ((dec.Count >= 2 && (Settings.PowerPointSettings.IsEnableTwoFingerGestureInPresentationMode || StackPanelPPTControls.Visibility != Visibility.Visible || StackPanelPPTButtons.Visibility == Visibility.Collapsed)) || isSingleFingerDragMode)
             {
                 ManipulationDelta md = e.DeltaManipulation;
                 Vector trans = md.Translation;  // 获得位移矢量
@@ -1686,12 +2239,12 @@ namespace Ink_Canvas
                 center = m.Transform(center);  // 转换为矩阵缩放和旋转的中心点
 
                 // Update matrix to reflect translation/rotation
-                m.Translate(trans.X, trans.Y);  // 移动
+                if (Settings.Gesture.IsEnableTwoFingerTranslate)
+                    m.Translate(trans.X, trans.Y);  // 移动
                 if (Settings.Gesture.IsEnableTwoFingerRotation)
-                {
                     m.RotateAt(rotate, center.X, center.Y);  // 旋转
-                }
-                m.ScaleAt(scale.X, scale.Y, center.X, center.Y);  // 缩放
+                if (Settings.Gesture.IsEnableTwoFingerZoom)
+                    m.ScaleAt(scale.X, scale.Y, center.X, center.Y);  // 缩放
 
                 StrokeCollection strokes = inkCanvas.GetSelectedStrokes();
                 if (strokes.Count != 0)
@@ -1711,12 +2264,15 @@ namespace Ink_Canvas
                             }
                         }
 
-                        try
+                        if (Settings.Gesture.IsEnableTwoFingerZoom)
                         {
-                            stroke.DrawingAttributes.Width *= md.Scale.X;
-                            stroke.DrawingAttributes.Height *= md.Scale.Y;
+                            try
+                            {
+                                stroke.DrawingAttributes.Width *= md.Scale.X;
+                                stroke.DrawingAttributes.Height *= md.Scale.Y;
+                            }
+                            catch { }
                         }
-                        catch { }
                     }
                 }
                 else
@@ -1725,12 +2281,15 @@ namespace Ink_Canvas
                     {
                         stroke.Transform(m, false);
 
-                        try
+                        if (Settings.Gesture.IsEnableTwoFingerZoom)
                         {
-                            stroke.DrawingAttributes.Width *= md.Scale.X;
-                            stroke.DrawingAttributes.Height *= md.Scale.Y;
+                            try
+                            {
+                                stroke.DrawingAttributes.Width *= md.Scale.X;
+                                stroke.DrawingAttributes.Height *= md.Scale.Y;
+                            }
+                            catch { }
                         }
-                        catch { }
                     }
                     foreach (Circle circle in circles)
                     {
@@ -1757,7 +2316,6 @@ namespace Ink_Canvas
             {
                 pptApplication = (Microsoft.Office.Interop.PowerPoint.Application)Marshal.GetActiveObject("PowerPoint.Application");
                 //pptApplication.SlideShowWindows[1].View.Next();
-
                 if (pptApplication != null)
                 {
                     //获得演示文稿对象
@@ -1797,12 +2355,17 @@ namespace Ink_Canvas
         }
         private void ToggleSwitchSupportWPS_Toggled(object sender, RoutedEventArgs e)
         {
-            isWPSSupportOn = ToggleSwitchSupportWPS.IsOn;
+            if (!isLoaded) return;
+
+            Settings.PowerPointSettings.IsSupportWPS = ToggleSwitchSupportWPS.IsOn;
+            SaveSettingsToFile();
         }
 
-        public static bool isWPSSupportOn = false;
+        public static bool isWPSSupportOn => Settings.PowerPointSettings.IsSupportWPS;
 
         public static bool IsShowingRestoreHiddenSlidesWindow = false;
+
+        public static bool IsNotifyPreviousPageWindowShown = false;
 
         private void TimerCheckPPT_Elapsed(object sender, ElapsedEventArgs e)
         {
@@ -1853,30 +2416,77 @@ namespace Ink_Canvas
                     }
                 }
 
-                if (pptApplication == null) throw new Exception();
+                if (pptApplication == null) return;
                 //BtnCheckPPT.Visibility = Visibility.Collapsed;
 
+                // 跳转到上次播放页
+                if (Settings.PowerPointSettings.IsNotifyPreviousPage)
+                    Application.Current.Dispatcher.BeginInvoke(() =>
+                        {
+                            string defaultFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) +
+                                                       @"\Ink Canvas Strokes\Auto Saved\Presentations\";
+                            string folderPath = defaultFolderPath + presentation.Name + "_" + presentation.Slides.Count;
+                            if (File.Exists(folderPath + "/Position") & !IsNotifyPreviousPageWindowShown) //判断是否已存在NotifyPreviousPage窗口
+                            {
+                                if (int.TryParse(File.ReadAllText(folderPath + "/Position"), out var page))
+                                {
+                                    IsNotifyPreviousPageWindowShown= true;
+                                    if (page <= 0) return;
+                                    new YesOrNoNotificationWindow($"上次播放到了第 {page} 页, 是否立即跳转", () =>
+                                    {
+                                        if (pptApplication.SlideShowWindows.Count >= 1)
+                                        {
+                                            // 如果已经播放了的话, 跳转
+                                            presentation.SlideShowWindow.View.GotoSlide(page);
+                                        }
+                                        else
+                                        {
+                                            presentation.Windows[1].View.GotoSlide(page);
+                                        }
+                                    }).ShowDialog();
+                                }
+                            }
+                        }, DispatcherPriority.Normal);
+
+
                 //检查是否有隐藏幻灯片
-                bool isHaveHiddenSlide = false;
-                foreach (Slide slide in slides)
+                if (Settings.PowerPointSettings.IsNotifyHiddenPage)
                 {
-                    if (slide.SlideShowTransition.Hidden == Microsoft.Office.Core.MsoTriState.msoTrue)
+                    bool isHaveHiddenSlide = false;
+                    foreach (Slide slide in slides)
                     {
-                        isHaveHiddenSlide = true;
-                        break;
+                        if (slide.SlideShowTransition.Hidden == Microsoft.Office.Core.MsoTriState.msoTrue)
+                        {
+                            isHaveHiddenSlide = true;
+                            break;
+                        }
                     }
+
+                    Application.Current.Dispatcher.BeginInvoke(() =>
+                    {
+                        if (isHaveHiddenSlide && !IsShowingRestoreHiddenSlidesWindow)
+                        {
+                            IsShowingRestoreHiddenSlidesWindow = true;
+                            new YesOrNoNotificationWindow("检测到此演示文稿包含隐藏的幻灯片，是否取消隐藏？",
+                                () =>
+                                {
+                                    foreach (Slide slide in slides)
+                                    {
+                                        if (slide.SlideShowTransition.Hidden ==
+                                            Microsoft.Office.Core.MsoTriState.msoTrue)
+                                        {
+                                            slide.SlideShowTransition.Hidden =
+                                                Microsoft.Office.Core.MsoTriState.msoFalse;
+                                        }
+                                    }
+                                }).ShowDialog();
+                        }
+
+
+
+                        BtnPPTSlideShow.Visibility = Visibility.Visible;
+                    }, DispatcherPriority.Normal);
                 }
-
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    if (isHaveHiddenSlide && !IsShowingRestoreHiddenSlidesWindow)
-                    {
-                        IsShowingRestoreHiddenSlidesWindow = true;
-                        new RestoreHiddenSlidesWindow().ShowDialog();
-                    }
-
-                    BtnPPTSlideShow.Visibility = Visibility.Visible;
-                });
 
                 //如果检测到已经开始放映，则立即进入画板模式
                 if (pptApplication.SlideShowWindows.Count >= 1)
@@ -1903,17 +2513,30 @@ namespace Ink_Canvas
             pptApplication.SlideShowEnd -= PptApplication_SlideShowEnd;
             pptApplication = null;
             timerCheckPPT.Start();
-            BtnPPTSlideShow.Visibility = Visibility.Collapsed;
-            BtnPPTSlideShowEnd.Visibility = Visibility.Collapsed;
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                //BtnPPTSlideShow.Visibility = Visibility.Collapsed;
+                BtnPPTSlideShowEnd.Visibility = Visibility.Collapsed;
+            });
         }
 
         bool isPresentationHaveBlackSpace = false;
+
+
+        private string pptName = null;
+        int currentShowPosition = -1;
         //bool isButtonBackgroundTransparent = true; //此变量仅用于保存用于幻灯片放映时的优化
         private void PptApplication_SlideShowBegin(SlideShowWindow Wn)
         {
             LogHelper.WriteLogToFile("PowerPoint Application Slide Show Begin", LogHelper.LogType.Event);
             Application.Current.Dispatcher.Invoke(() =>
             {
+                if (currentMode == 1)
+                {
+                    // 退出画板模式
+                    BtnSwitch_Click(null, null);
+                }
+
                 //调整颜色
                 double screenRatio = SystemParameters.PrimaryScreenWidth / SystemParameters.PrimaryScreenHeight;
                 if (Math.Abs(screenRatio - 16.0 / 9) <= -0.01)
@@ -1938,7 +2561,7 @@ namespace Ink_Canvas
                         }
                     }
                 }
-                else if(screenRatio == -256 / 135)
+                else if (screenRatio == -256 / 135)
                 {
 
                 }
@@ -1947,11 +2570,12 @@ namespace Ink_Canvas
                 previousSlideID = 0;
                 memoryStreams = new MemoryStream[slidescount + 2];
 
+                pptName = Wn.Presentation.Name;
                 LogHelper.NewLog("Name: " + Wn.Presentation.Name);
                 LogHelper.NewLog("Slides Count: " + slidescount.ToString());
 
                 //检查是否有已有墨迹，并加载
-                if (Settings.Automation.IsAutoSaveStrokesInPowerPoint)
+                if (Settings.PowerPointSettings.IsAutoSaveStrokesInPowerPoint)
                 {
                     string defaultFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) + @"\Ink Canvas Strokes\Auto Saved\Presentations\";
                     if (Directory.Exists(defaultFolderPath + Wn.Presentation.Name + "_" + Wn.Presentation.Slides.Count))
@@ -1961,21 +2585,24 @@ namespace Ink_Canvas
                         int count = 0;
                         foreach (FileInfo file in files)
                         {
-                            int i = -1;
-                            try
+                            if (file.Name != "Position")
                             {
-                                i = int.Parse(System.IO.Path.GetFileNameWithoutExtension(file.Name));
-                                //var fs = new FileStream(file.FullName, FileMode.Open, FileAccess.Read);
-                                //MemoryStream ms = new MemoryStream(File.ReadAllBytes(file.FullName));
-                                //new StrokeCollection(fs).Save(ms);
-                                //ms.Position = 0;
-                                memoryStreams[i] = new MemoryStream(File.ReadAllBytes(file.FullName));
-                                memoryStreams[i].Position = 0;
-                                count++;
-                            }
-                            catch (Exception ex)
-                            {
-                                LogHelper.WriteLogToFile(string.Format("Failed to load strokes on Slide {0}\n{1}", i, ex.ToString()), LogHelper.LogType.Error);
+                                int i = -1;
+                                try
+                                {
+                                    i = int.Parse(System.IO.Path.GetFileNameWithoutExtension(file.Name));
+                                    //var fs = new FileStream(file.FullName, FileMode.Open, FileAccess.Read);
+                                    //MemoryStream ms = new MemoryStream(File.ReadAllBytes(file.FullName));
+                                    //new StrokeCollection(fs).Save(ms);
+                                    //ms.Position = 0;
+                                    memoryStreams[i] = new MemoryStream(File.ReadAllBytes(file.FullName));
+                                    memoryStreams[i].Position = 0;
+                                    count++;
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogHelper.WriteLogToFile(string.Format("Failed to load strokes on Slide {0}\n{1}", i, ex.ToString()), LogHelper.LogType.Error);
+                                }
                             }
                         }
                         LogHelper.WriteLogToFile(string.Format("Loaded {0} saved strokes", count.ToString()));
@@ -1990,7 +2617,7 @@ namespace Ink_Canvas
                 BtnPPTSlideShowEnd.Visibility = Visibility.Visible;
                 ViewBoxStackPanelMain.Margin = new Thickness(10, 10, 10, 10);
 
-                if (Settings.Behavior.IsShowCanvasAtNewSlideShow && Main_Grid.Background == Brushes.Transparent)
+                if (Settings.PowerPointSettings.IsShowCanvasAtNewSlideShow && Main_Grid.Background == Brushes.Transparent)
                 {
                     if (currentMode != 0)
                     {
@@ -1998,7 +2625,7 @@ namespace Ink_Canvas
                         GridBackgroundCover.Visibility = Visibility.Collapsed;
 
                         //SaveStrokes();
-                        inkCanvas.Strokes.Clear();
+                        ClearStrokes(true);
 
                         if (BtnSwitchTheme.Content.ToString() == "浅色")
                         {
@@ -2019,23 +2646,18 @@ namespace Ink_Canvas
                 //    GridBackgroundCover.Visibility = Visibility.Hidden;
                 //}
 
-                BtnRedo.IsEnabled = false;
-                BtnRedo.Visibility = Visibility.Collapsed;
+                ClearStrokes(true);
 
-                BtnUndo.IsEnabled = false;
-                BtnUndo.Visibility = Visibility.Visible;
-
-                inkCanvas.Strokes.Clear();
-
-                BorderFloatingBarMainControls.Visibility = Visibility.Visible;
+                SetBorderFloatingBarMainControlsVisibility(true, false);
                 BorderPenColorRed_MouseUp(BorderPenColorRed, null);
 
-                if (Settings.Behavior.IsShowCanvasAtNewSlideShow == false)
+                if (Settings.PowerPointSettings.IsShowCanvasAtNewSlideShow == false)
                 {
                     BtnHideInkCanvas_Click(BtnHideInkCanvas, null);
                 }
 
                 isEnteredSlideShowEndEvent = false;
+                PptNavigationTextBlock.Text = $"{Wn.View.CurrentShowPosition}/{Wn.Presentation.Slides.Count}";
                 LogHelper.NewLog("PowerPoint Slide Show Loading process complete");
 
                 new Thread(new ThreadStart(() =>
@@ -2071,6 +2693,7 @@ namespace Ink_Canvas
         bool isEnteredSlideShowEndEvent = false; //防止重复调用本函数导致墨迹保存失效
         private void PptApplication_SlideShowEnd(Presentation Pres)
         {
+            IsNotifyPreviousPageWindowShown = false;
             LogHelper.WriteLogToFile(string.Format("PowerPoint Slide Show End"), LogHelper.LogType.Event);
             if (isEnteredSlideShowEndEvent)
             {
@@ -2078,7 +2701,7 @@ namespace Ink_Canvas
                 return;
             }
             isEnteredSlideShowEndEvent = true;
-            if (Settings.Automation.IsAutoSaveStrokesInPowerPoint)
+            if (Settings.PowerPointSettings.IsAutoSaveStrokesInPowerPoint)
             {
                 string defaultFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) + @"\Ink Canvas Strokes\Auto Saved\Presentations\";
                 string folderPath = defaultFolderPath + Pres.Name + "_" + Pres.Slides.Count;
@@ -2086,6 +2709,22 @@ namespace Ink_Canvas
                 {
                     Directory.CreateDirectory(folderPath);
                 }
+                try
+                {
+                    File.WriteAllText(folderPath + "/Position", previousSlideID.ToString());
+                }
+                catch { }
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    try
+                    {
+                        MemoryStream ms = new MemoryStream();
+                        inkCanvas.Strokes.Save(ms);
+                        ms.Position = 0;
+                        memoryStreams[currentShowPosition] = ms;
+                    }
+                    catch { }
+                });
                 for (int i = 1; i <= Pres.Slides.Count; i++)
                 {
                     if (memoryStreams[i] != null)
@@ -2141,7 +2780,7 @@ namespace Ink_Canvas
                     GridBackgroundCover.Visibility = Visibility.Collapsed;
 
                     //SaveStrokes();
-                    inkCanvas.Strokes.Clear();
+                    ClearStrokes(true);
                     //RestoreStrokes(true);
 
                     if (BtnSwitchTheme.Content.ToString() == "浅色")
@@ -2159,19 +2798,14 @@ namespace Ink_Canvas
                 //    SaveStrokes();
                 //}
 
-                BtnRedo.IsEnabled = false;
-                BtnRedo.Visibility = Visibility.Collapsed;
 
-                BtnUndo.IsEnabled = false;
-                BtnUndo.Visibility = Visibility.Visible;
-
-                inkCanvas.Strokes.Clear();
+                ClearStrokes(true);
 
                 if (Main_Grid.Background != Brushes.Transparent)
                 {
                     BtnHideInkCanvas_Click(BtnHideInkCanvas, null);
                 }
-                
+
                 if (pointDesktop != new Point(-1, -1))
                 {
                     ViewboxFloatingBar.Margin = new Thickness(pointDesktop.X, pointDesktop.Y, -2000, -200);
@@ -2194,27 +2828,32 @@ namespace Ink_Canvas
                     ms.Position = 0;
                     memoryStreams[previousSlideID] = ms;
 
-                    BtnRedo.IsEnabled = false;
-                    BtnRedo.Visibility = Visibility.Collapsed;
+                    if (inkCanvas.Strokes.Count > Settings.Automation.MinimumAutomationStrokeNumber && Settings.PowerPointSettings.IsAutoSaveScreenShotInPowerPoint && !_isPptClickingBtnTurned)
+                        SaveScreenShot(true, Wn.Presentation.Name + "/" + Wn.View.CurrentShowPosition);
+                    _isPptClickingBtnTurned = false;
 
-                    BtnUndo.IsEnabled = false;
-                    BtnUndo.Visibility = Visibility.Visible;
-
-                    inkCanvas.Strokes.Clear();
+                    ClearStrokes(true);
+                    timeMachine.ClearStrokeHistory();
 
                     try
                     {
-                        if (memoryStreams[Wn.View.CurrentShowPosition].Length > 0)
+                        if (memoryStreams[Wn.View.CurrentShowPosition] != null && memoryStreams[Wn.View.CurrentShowPosition].Length > 0)
                         {
-                            inkCanvas.Strokes = new System.Windows.Ink.StrokeCollection(memoryStreams[Wn.View.CurrentShowPosition]);
+                            inkCanvas.Strokes.Add(new StrokeCollection(memoryStreams[Wn.View.CurrentShowPosition]));
                         }
+                        currentShowPosition = Wn.View.CurrentShowPosition;
                     }
                     catch
                     { }
+
+                    PptNavigationTextBlock.Text = $"{Wn.View.CurrentShowPosition}/{Wn.Presentation.Slides.Count}";
                 });
                 previousSlideID = Wn.View.CurrentShowPosition;
+
             }
         }
+
+        private bool _isPptClickingBtnTurned = false;
 
         private void BtnPPTSlidesUp_Click(object sender, RoutedEventArgs e)
         {
@@ -2224,11 +2863,15 @@ namespace Ink_Canvas
                 currentMode = 0;
             }
 
+            _isPptClickingBtnTurned = true;
+            if (inkCanvas.Strokes.Count > Settings.Automation.MinimumAutomationStrokeNumber &&
+                Settings.PowerPointSettings.IsAutoSaveScreenShotInPowerPoint)
+                SaveScreenShot(true, pptApplication.SlideShowWindows[1].Presentation.Name + "/" + pptApplication.SlideShowWindows[1].View.CurrentShowPosition);
             try
             {
                 new Thread(new ThreadStart(() =>
                 {
-                    pptApplication.SlideShowWindows[1].View.Application.SlideShowWindows[1].Activate();
+                    pptApplication.SlideShowWindows[1].Activate();
                     pptApplication.SlideShowWindows[1].View.Previous();
                 })).Start();
             }
@@ -2246,18 +2889,38 @@ namespace Ink_Canvas
                 GridBackgroundCover.Visibility = Visibility.Collapsed;
                 currentMode = 0;
             }
-
+            _isPptClickingBtnTurned = true;
+            if (inkCanvas.Strokes.Count > Settings.Automation.MinimumAutomationStrokeNumber &&
+                Settings.PowerPointSettings.IsAutoSaveScreenShotInPowerPoint)
+                SaveScreenShot(true, pptApplication.SlideShowWindows[1].Presentation.Name + "/" + pptApplication.SlideShowWindows[1].View.CurrentShowPosition);
             try
             {
                 new Thread(new ThreadStart(() =>
                 {
-                    pptApplication.SlideShowWindows[1].View.Application.SlideShowWindows[1].Activate();
+                    pptApplication.SlideShowWindows[1].Activate();
                     pptApplication.SlideShowWindows[1].View.Next();
                 })).Start();
             }
             catch
             {
                 StackPanelPPTControls.Visibility = Visibility.Collapsed;
+            }
+        }
+
+
+        private async void PPTNavigationBtn_Click(object sender, MouseButtonEventArgs e)
+        {
+            Main_Grid.Background = new SolidColorBrush(StringToColor("#01FFFFFF"));
+            BtnHideInkCanvas_Click(sender, e);
+            pptApplication.SlideShowWindows[1].SlideNavigation.Visible = true;
+            // 控制居中
+            if (BtnPPTSlideShowEnd.Visibility == Visibility.Visible)
+            {
+                if (ViewboxFloatingBar.Margin == new Thickness((SystemParameters.PrimaryScreenWidth - ViewboxFloatingBar.ActualWidth) / 2, SystemParameters.PrimaryScreenHeight - 60, -2000, -200))
+                {
+                    await Task.Delay(100);
+                    ViewboxFloatingBar.Margin = new Thickness((SystemParameters.PrimaryScreenWidth - ViewboxFloatingBar.ActualWidth) / 2, SystemParameters.PrimaryScreenHeight - 60, -2000, -200);
+                }
             }
         }
 
@@ -2283,6 +2946,8 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Save(ms);
                     ms.Position = 0;
                     memoryStreams[pptApplication.SlideShowWindows[1].View.CurrentShowPosition] = ms;
+                    timeMachine.ClearStrokeHistory();
+                    IsNotifyPreviousPageWindowShown = false;
                 }
                 catch { }
             });
@@ -2319,10 +2984,10 @@ namespace Ink_Canvas
         {
             if (!isLoaded) return;
 
-            Settings.Behavior.PowerPointSupport = ToggleSwitchSupportPowerPoint.IsOn;
+            Settings.PowerPointSettings.PowerPointSupport = ToggleSwitchSupportPowerPoint.IsOn;
             SaveSettingsToFile();
 
-            if (Settings.Behavior.PowerPointSupport)
+            if (Settings.PowerPointSettings.PowerPointSupport)
             {
                 timerCheckPPT.Start();
             }
@@ -2336,7 +3001,7 @@ namespace Ink_Canvas
         {
             if (!isLoaded) return;
 
-            Settings.Behavior.IsShowCanvasAtNewSlideShow = ToggleSwitchShowCanvasAtNewSlideShow.IsOn;
+            Settings.PowerPointSettings.IsShowCanvasAtNewSlideShow = ToggleSwitchShowCanvasAtNewSlideShow.IsOn;
             SaveSettingsToFile();
         }
 
@@ -2403,6 +3068,25 @@ namespace Ink_Canvas
                 BtnErase.Visibility = Visibility.Collapsed;
             }
         }
+        private void ToggleSwitchShowButtonPPTNavigation_OnToggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+
+            Settings.PowerPointSettings.IsShowPPTNavigation = ToggleSwitchShowButtonPPTNavigation.IsOn;
+            SaveSettingsToFile();
+
+            PptNavigationBtn.Visibility =
+                Settings.PowerPointSettings.IsShowPPTNavigation ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void ComboBoxTheme_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Appearance.Theme = ComboBoxTheme.SelectedIndex;
+            SystemEvents_UserPreferenceChanged(null, null);
+            SaveSettingsToFile();
+        }
+
 
         private void ToggleSwitchShowButtonHideControl_Toggled(object sender, RoutedEventArgs e)
         {
@@ -2509,6 +3193,14 @@ namespace Ink_Canvas
             SaveSettingsToFile();
         }
 
+
+        private void ComboBoxEraserType_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Canvas.EraserType = ComboBoxEraserType.SelectedIndex;
+            SaveSettingsToFile();
+        }
+
         private void InkWidthSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (!isLoaded) return;
@@ -2518,6 +3210,13 @@ namespace Ink_Canvas
 
             Settings.Canvas.InkWidth = ((Slider)sender).Value / 2;
 
+            SaveSettingsToFile();
+        }
+
+        private void ComboBoxHyperbolaAsymptoteOption_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Canvas.HyperbolaAsymptoteOption = (OptionalOperation)ComboBoxHyperbolaAsymptoteOption.SelectedIndex;
             SaveSettingsToFile();
         }
 
@@ -2557,11 +3256,18 @@ namespace Ink_Canvas
             }
         }
 
+        private void ToggleSwitchSaveScreenshotsInDateFolders_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Automation.IsSaveScreenshotsInDateFolders = ToggleSwitchSaveScreenshotsInDateFolders.IsOn;
+            SaveSettingsToFile();
+        }
+
         private void ToggleSwitchAutoSaveStrokesAtScreenshot_Toggled(object sender, RoutedEventArgs e)
         {
             if (!isLoaded) return;
             Settings.Automation.IsAutoSaveStrokesAtScreenshot = ToggleSwitchAutoSaveStrokesAtScreenshot.IsOn;
-            ToggleSwitchAutoSaveStrokesAtClear.Header = 
+            ToggleSwitchAutoSaveStrokesAtClear.Header =
                 ToggleSwitchAutoSaveStrokesAtScreenshot.IsOn ? "清屏时自动截图并保存墨迹" : "清屏时自动截图";
             SaveSettingsToFile();
         }
@@ -2573,10 +3279,84 @@ namespace Ink_Canvas
             SaveSettingsToFile();
         }
 
+
+        private void ToggleSwitchExitingWritingMode_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Automation.IsAutoClearWhenExitingWritingMode = ToggleSwitchClearExitingWritingMode.IsOn;
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchHideStrokeWhenSelecting_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Canvas.HideStrokeWhenSelecting = ToggleSwitchHideStrokeWhenSelecting.IsOn;
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchUsingWhiteboard_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Canvas.UsingWhiteboard = ToggleSwitchUsingWhiteboard.IsOn;
+            if (!Settings.Canvas.UsingWhiteboard)
+            {
+                BtnSwitchTheme.Content = "浅色";
+            }
+            else
+            {
+                BtnSwitchTheme.Content = "深色";
+            }
+            BtnSwitchTheme_Click(sender, e);
+            SaveSettingsToFile();
+        }
+
         private void ToggleSwitchAutoSaveStrokesInPowerPoint_Toggled(object sender, RoutedEventArgs e)
         {
             if (!isLoaded) return;
-            Settings.Automation.IsAutoSaveStrokesInPowerPoint = ToggleSwitchAutoSaveStrokesInPowerPoint.IsOn;
+            Settings.PowerPointSettings.IsAutoSaveStrokesInPowerPoint = ToggleSwitchAutoSaveStrokesInPowerPoint.IsOn;
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchNotifyPreviousPage_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.PowerPointSettings.IsNotifyPreviousPage = ToggleSwitchNotifyPreviousPage.IsOn;
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchNotifyHiddenPage_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.PowerPointSettings.IsNotifyHiddenPage = ToggleSwitchNotifyHiddenPage.IsOn;
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchNoStrokeClearInPowerPoint_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.PowerPointSettings.IsNoClearStrokeOnSelectWhenInPowerPoint = ToggleSwitchNoStrokeClearInPowerPoint.IsOn;
+            SaveSettingsToFile();
+        }
+
+
+        private void ToggleSwitchShowStrokeOnSelectInPowerPoint_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.PowerPointSettings.IsShowStrokeOnSelectInPowerPoint = ToggleSwitchShowStrokeOnSelectInPowerPoint.IsOn;
+            SaveSettingsToFile();
+        }
+
+        private void SideControlMinimumAutomationSlider_ValueChanged(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Automation.MinimumAutomationStrokeNumber = (int)SideControlMinimumAutomationSlider.Value;
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchAutoSaveScreenShotInPowerPoint_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.PowerPointSettings.IsAutoSaveScreenShotInPowerPoint = ToggleSwitchAutoSaveScreenShotInPowerPoint.IsOn;
             SaveSettingsToFile();
         }
 
@@ -2589,16 +3369,32 @@ namespace Ink_Canvas
         {
             if (!isLoaded) return;
 
-            Settings.Gesture.IsEnableFingerGestureSlideShowControl = ToggleSwitchEnableFingerGestureSlideShowControl.IsOn;
+            Settings.PowerPointSettings.IsEnableFingerGestureSlideShowControl = ToggleSwitchEnableFingerGestureSlideShowControl.IsOn;
 
             SaveSettingsToFile();
         }
 
-        private void ToggleSwitchEnableTwoFingerZoom_Toggled(object sender, RoutedEventArgs e)
-        {
+        private void ToggleSwitchDisableLockSmithByDefault_Toggled(object sender, RoutedEventArgs e) {
+            if (!isLoaded) return;
+
+            Settings.Gesture.IsDisableLockSmithByDefault = ToggleSwitchDisableLockSmithByDefault.IsOn;
+
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchEnableTwoFingerZoom_Toggled(object sender, RoutedEventArgs e) {
             if (!isLoaded) return;
 
             Settings.Gesture.IsEnableTwoFingerZoom = ToggleSwitchEnableTwoFingerZoom.IsOn;
+
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchEnableTwoFingerTranslate_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+
+            Settings.Gesture.IsEnableTwoFingerTranslate = ToggleSwitchEnableTwoFingerTranslate.IsOn;
 
             SaveSettingsToFile();
         }
@@ -2617,7 +3413,7 @@ namespace Ink_Canvas
         {
             if (!isLoaded) return;
 
-            Settings.Gesture.IsEnableTwoFingerGestureInPresentationMode = ToggleSwitchEnableTwoFingerGestureInPresentationMode.IsOn;
+            Settings.PowerPointSettings.IsEnableTwoFingerGestureInPresentationMode = ToggleSwitchEnableTwoFingerGestureInPresentationMode.IsOn;
 
             SaveSettingsToFile();
         }
@@ -2656,7 +3452,8 @@ namespace Ink_Canvas
             }
             catch { }
             SymbolIconResetSuggestionComplete.Visibility = Visibility.Visible;
-            new Thread(new ThreadStart(() => {
+            new Thread(new ThreadStart(() =>
+            {
                 Thread.Sleep(5000);
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -2677,7 +3474,8 @@ namespace Ink_Canvas
             }
             catch { }
             SymbolIconResetDefaultComplete.Visibility = Visibility.Visible;
-            new Thread(new ThreadStart(() => {
+            new Thread(new ThreadStart(() =>
+            {
                 Thread.Sleep(5000);
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -2700,10 +3498,42 @@ namespace Ink_Canvas
 
         #region Advanced
 
-        private void ToggleSwitchIsSpecialScreen_Toggled(object sender, RoutedEventArgs e)
+        private void ToggleSwitchIsSpecialScreen_OnToggled(object sender, RoutedEventArgs e)
         {
             if (!isLoaded) return;
             Settings.Advanced.IsSpecialScreen = ToggleSwitchIsSpecialScreen.IsOn;
+            TouchMultiplierSlider.Visibility = ToggleSwitchIsSpecialScreen.IsOn ? Visibility.Visible : Visibility.Collapsed;
+            SaveSettingsToFile();
+        }
+
+        private void TouchMultiplierSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (!isLoaded) return;
+            Settings.Advanced.TouchMultiplier = e.NewValue;
+            SaveSettingsToFile();
+        }
+
+        private void BorderCalculateMultiplier_TouchDown(object sender, TouchEventArgs e)
+        {
+            var args = e.GetTouchPoint(null).Bounds;
+            double value;
+            if (!Settings.Advanced.IsQuadIR) value = args.Width;
+            else value = Math.Sqrt(args.Width * args.Height); //四边红外
+
+            TextBlockShowCalculatedMultiplier.Text = (5 / (value * 1.1)).ToString();
+        }
+
+        private void ToggleSwitchEraserBindTouchMultiplier_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Advanced.EraserBindTouchMultiplier = ToggleSwitchEraserBindTouchMultiplier.IsOn;
+            SaveSettingsToFile();
+        }
+
+        private void ToggleSwitchIsQuadIR_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (!isLoaded) return;
+            Settings.Advanced.IsQuadIR = ToggleSwitchIsQuadIR.IsOn;
             SaveSettingsToFile();
         }
 
@@ -2721,7 +3551,7 @@ namespace Ink_Canvas
             string text = JsonConvert.SerializeObject(Settings, Formatting.Indented);
             try
             {
-                File.WriteAllText(settingsFileName, text);
+                File.WriteAllText(App.RootPath + settingsFileName, text);
             }
             catch { }
         }
@@ -2777,42 +3607,24 @@ namespace Ink_Canvas
 
         private void BtnUndo_Click(object sender, RoutedEventArgs e)
         {
-            int whiteboardIndex = CurrentWhiteboardIndex;
-            if (currentMode == 0)
+            if (inkCanvas.GetSelectedStrokes().Count != 0)
             {
-                whiteboardIndex = 0;
+                GridInkCanvasSelectionCover.Visibility = Visibility.Collapsed;
+                inkCanvas.Select(new StrokeCollection());
             }
-
-            StrokeCollection strokes = inkCanvas.Strokes.Clone();
-            inkCanvas.Strokes = strokeCollections[whiteboardIndex].Clone();
-            strokeCollections[whiteboardIndex] = strokes;
-
-            BtnRedo.IsEnabled = true;
-            BtnRedo.Visibility = Visibility.Visible;
-
-            BtnUndo.IsEnabled = false;
-            BtnUndo.Visibility = Visibility.Collapsed;
+            var item = timeMachine.Undo();
+            ApplyHistoryToCanvas(item);
         }
-
         private void BtnRedo_Click(object sender, RoutedEventArgs e)
         {
-            int whiteboardIndex = CurrentWhiteboardIndex;
-            if (currentMode == 0)
+            if (inkCanvas.GetSelectedStrokes().Count != 0)
             {
-                whiteboardIndex = 0;
+                GridInkCanvasSelectionCover.Visibility = Visibility.Collapsed;
+                inkCanvas.Select(new StrokeCollection());
             }
-
-            StrokeCollection strokes = inkCanvas.Strokes.Clone();
-            inkCanvas.Strokes = strokeCollections[whiteboardIndex].Clone();
-            strokeCollections[whiteboardIndex] = strokes;
-
-            BtnUndo.IsEnabled = true;
-            BtnUndo.Visibility = Visibility.Visible;
-
-            BtnRedo.IsEnabled = false;
-            BtnRedo.Visibility = Visibility.Collapsed;
+            var item = timeMachine.Redo();
+            ApplyHistoryToCanvas(item);
         }
-
         private void Btn_IsEnabledChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
             if (!isLoaded) return;
@@ -2886,21 +3698,42 @@ namespace Ink_Canvas
         {
             if (lastBorderMouseDownObject != sender) return;
 
-            foreach (Stroke stroke in inkCanvas.GetSelectedStrokes())
-            {
-                stroke.DrawingAttributes.Width *= 0.8;
-                stroke.DrawingAttributes.Height *= 0.8;
-            }
+            ChangeStrokeThickness(0.8);
         }
 
         private void GridPenWidthIncrease_MouseUp(object sender, MouseButtonEventArgs e)
         {
             if (lastBorderMouseDownObject != sender) return;
 
+            ChangeStrokeThickness(1.25);
+        }
+
+        private void ChangeStrokeThickness(double multipler)
+        {
             foreach (Stroke stroke in inkCanvas.GetSelectedStrokes())
             {
-                stroke.DrawingAttributes.Width *= 1.25;
-                stroke.DrawingAttributes.Height *= 1.25;
+                //stroke.DrawingAttributes.Width *= 1.25;
+                //stroke.DrawingAttributes.Height *= 1.25;
+
+                var newWidth = stroke.DrawingAttributes.Width * multipler;
+                var newHeight = stroke.DrawingAttributes.Height * multipler;
+
+                if (newWidth >= DrawingAttributes.MinWidth && newWidth <= DrawingAttributes.MaxWidth
+                    && newHeight >= DrawingAttributes.MinHeight && newHeight <= DrawingAttributes.MaxHeight)
+                {
+                    stroke.DrawingAttributes.Width = newWidth;
+                    stroke.DrawingAttributes.Height = newHeight;
+                }
+            }
+            if (DrawingAttributesHistory.Count > 0)
+            {
+
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
             }
         }
 
@@ -2931,12 +3764,25 @@ namespace Ink_Canvas
             // Update matrix to reflect translation/rotation
             m.ScaleAt(-1, 1, center.X, center.Y);  // 缩放
 
-            StrokeCollection strokes = inkCanvas.GetSelectedStrokes();
-            foreach (Stroke stroke in strokes)
+            StrokeCollection targetStrokes = inkCanvas.GetSelectedStrokes();
+            foreach (Stroke stroke in targetStrokes)
             {
                 stroke.Transform(m, false);
             }
-
+            if (DrawingAttributesHistory.Count > 0)
+            {
+                var collecion = new StrokeCollection();
+                foreach (var item in DrawingAttributesHistory)
+                {
+                    collecion.Add(item.Key);
+                }
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
+            }
             //updateBorderStrokeSelectionControlLocation();
         }
 
@@ -2956,10 +3802,19 @@ namespace Ink_Canvas
             // Update matrix to reflect translation/rotation
             m.ScaleAt(1, -1, center.X, center.Y);  // 缩放
 
-            StrokeCollection strokes = inkCanvas.GetSelectedStrokes();
-            foreach (Stroke stroke in strokes)
+            StrokeCollection targetStrokes = inkCanvas.GetSelectedStrokes();
+            foreach (Stroke stroke in targetStrokes)
             {
                 stroke.Transform(m, false);
+            }
+            if (DrawingAttributesHistory.Count > 0)
+            {
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
             }
         }
 
@@ -2979,10 +3834,19 @@ namespace Ink_Canvas
             // Update matrix to reflect translation/rotation
             m.RotateAt(45, center.X, center.Y);  // 旋转
 
-            StrokeCollection strokes = inkCanvas.GetSelectedStrokes();
-            foreach (Stroke stroke in strokes)
+            StrokeCollection targetStrokes = inkCanvas.GetSelectedStrokes();
+            foreach (Stroke stroke in targetStrokes)
             {
                 stroke.Transform(m, false);
+            }
+            if (DrawingAttributesHistory.Count > 0)
+            {
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
             }
         }
 
@@ -3002,10 +3866,24 @@ namespace Ink_Canvas
             // Update matrix to reflect translation/rotation
             m.RotateAt(90, center.X, center.Y);  // 旋转
 
-            StrokeCollection strokes = inkCanvas.GetSelectedStrokes();
-            foreach (Stroke stroke in strokes)
+            StrokeCollection targetStrokes = inkCanvas.GetSelectedStrokes();
+            foreach (Stroke stroke in targetStrokes)
             {
                 stroke.Transform(m, false);
+            }
+            if (DrawingAttributesHistory.Count > 0)
+            {
+                var collecion = new StrokeCollection();
+                foreach (var item in DrawingAttributesHistory)
+                {
+                    collecion.Add(item.Key);
+                }
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
             }
         }
 
@@ -3033,8 +3911,34 @@ namespace Ink_Canvas
         {
             forceEraser = true;
             drawingShapeMode = 0;
-            inkCanvas.EditingMode = InkCanvasEditingMode.Select;
             inkCanvas.IsManipulationEnabled = false;
+            if (inkCanvas.EditingMode == InkCanvasEditingMode.Select)
+            {
+                if (inkCanvas.GetSelectedStrokes().Count == inkCanvas.Strokes.Count)
+                {
+                    inkCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                    inkCanvas.IsManipulationEnabled = true;
+                }
+                else
+                {
+                    //inkCanvas.Select(inkCanvas.Strokes);
+                    // Fixed bug: 当通过如鼠标点击等某些方式创建没有高度或长度的笔画时，全选功能不能使用克隆、旋转、翻转、调整笔画粗细、删除功能
+                    StrokeCollection selectedStrokes = new StrokeCollection();
+                    foreach (Stroke stroke in inkCanvas.Strokes)
+                    {
+                        if (stroke.GetBounds().Width > 0 && stroke.GetBounds().Height > 0)
+                        {
+                            selectedStrokes.Add(stroke);
+                        }
+                    }
+                    inkCanvas.Select(selectedStrokes);
+                }
+            }
+            else
+            {
+                inkCanvas.EditingMode = InkCanvasEditingMode.Select;
+
+            }
         }
 
         double BorderStrokeSelectionControlWidth = 490.0;
@@ -3063,8 +3967,8 @@ namespace Ink_Canvas
             double borderTop = inkCanvas.GetSelectionBounds().Bottom + 15;
             if (borderLeft < 0) borderLeft = 0;
             if (borderTop < 0) borderTop = 0;
-            if (Width - borderLeft < BorderStrokeSelectionControlWidth) borderLeft = Width - BorderStrokeSelectionControlWidth;
-            if (Height - borderTop < BorderStrokeSelectionControlHeight) borderTop = Height - BorderStrokeSelectionControlHeight;
+            if (Width - borderLeft < BorderStrokeSelectionControlWidth || double.IsNaN(borderLeft)) borderLeft = Width - BorderStrokeSelectionControlWidth;
+            if (Height - borderTop < BorderStrokeSelectionControlHeight || double.IsNaN(borderTop)) borderTop = Height - BorderStrokeSelectionControlHeight;
             BorderStrokeSelectionControl.Margin = new Thickness(borderLeft, borderTop, 0, 0);
         }
 
@@ -3075,7 +3979,24 @@ namespace Ink_Canvas
 
         private void GridInkCanvasSelectionCover_ManipulationCompleted(object sender, ManipulationCompletedEventArgs e)
         {
-
+            if (StrokeManipulationHistory?.Count > 0)
+            {
+                timeMachine.CommitStrokeManipulationHistory(StrokeManipulationHistory);
+                foreach (var item in StrokeManipulationHistory)
+                {
+                    StrokeInitialHistory[item.Key] = item.Value.Item2;
+                }
+                StrokeManipulationHistory = null;
+            }
+            if (DrawingAttributesHistory.Count > 0)
+            {
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
+            }
         }
 
         private void GridInkCanvasSelectionCover_ManipulationDelta(object sender, ManipulationDeltaEventArgs e)
@@ -3122,7 +4043,6 @@ namespace Ink_Canvas
                         }
                         catch { }
                     }
-
                     updateBorderStrokeSelectionControlLocation();
                 }
             }
@@ -3222,11 +4142,11 @@ namespace Ink_Canvas
 
             if (ToggleSwitchDrawShapeBorderAutoHide.IsOn)
             {
-                ((ModernWpf.Controls.SymbolIcon)sender).Symbol = ModernWpf.Controls.Symbol.Pin;
+                ((iNKORE.UI.WPF.Modern.Controls.SymbolIcon)sender).Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Pin;
             }
             else
             {
-                ((ModernWpf.Controls.SymbolIcon)sender).Symbol = ModernWpf.Controls.Symbol.UnPin;
+                ((iNKORE.UI.WPF.Modern.Controls.SymbolIcon)sender).Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.UnPin;
             }
         }
 
@@ -3300,7 +4220,10 @@ namespace Ink_Canvas
             lastMouseDownSender = null;
             if (isLongPressSelected)
             {
-                BorderDrawShape.Visibility = Visibility.Collapsed;
+                if (ToggleSwitchDrawShapeBorderAutoHide.IsOn)
+                {
+                    BorderDrawShape.Visibility = Visibility.Collapsed;
+                }
                 var dA = new DoubleAnimation(1, 1, new Duration(TimeSpan.FromMilliseconds(0)));
                 ImageDrawLine.BeginAnimation(OpacityProperty, dA);
             }
@@ -3319,7 +4242,10 @@ namespace Ink_Canvas
             lastMouseDownSender = null;
             if (isLongPressSelected)
             {
-                BorderDrawShape.Visibility = Visibility.Collapsed;
+                if (ToggleSwitchDrawShapeBorderAutoHide.IsOn)
+                {
+                    BorderDrawShape.Visibility = Visibility.Collapsed;
+                }
                 var dA = new DoubleAnimation(1, 1, new Duration(TimeSpan.FromMilliseconds(0)));
                 ImageDrawDashedLine.BeginAnimation(OpacityProperty, dA);
             }
@@ -3338,7 +4264,10 @@ namespace Ink_Canvas
             lastMouseDownSender = null;
             if (isLongPressSelected)
             {
-                BorderDrawShape.Visibility = Visibility.Collapsed;
+                if (ToggleSwitchDrawShapeBorderAutoHide.IsOn)
+                {
+                    BorderDrawShape.Visibility = Visibility.Collapsed;
+                }
                 var dA = new DoubleAnimation(1, 1, new Duration(TimeSpan.FromMilliseconds(0)));
                 ImageDrawDotLine.BeginAnimation(OpacityProperty, dA);
             }
@@ -3357,7 +4286,10 @@ namespace Ink_Canvas
             lastMouseDownSender = null;
             if (isLongPressSelected)
             {
-                BorderDrawShape.Visibility = Visibility.Collapsed;
+                if (ToggleSwitchDrawShapeBorderAutoHide.IsOn)
+                {
+                    BorderDrawShape.Visibility = Visibility.Collapsed;
+                }
                 var dA = new DoubleAnimation(1, 1, new Duration(TimeSpan.FromMilliseconds(0)));
                 ImageDrawArrow.BeginAnimation(OpacityProperty, dA);
             }
@@ -3376,7 +4308,10 @@ namespace Ink_Canvas
             lastMouseDownSender = null;
             if (isLongPressSelected)
             {
-                BorderDrawShape.Visibility = Visibility.Collapsed;
+                if (ToggleSwitchDrawShapeBorderAutoHide.IsOn)
+                {
+                    BorderDrawShape.Visibility = Visibility.Collapsed;
+                }
                 var dA = new DoubleAnimation(1, 1, new Duration(TimeSpan.FromMilliseconds(0)));
                 ImageDrawParallelLine.BeginAnimation(OpacityProperty, dA);
             }
@@ -3578,6 +4513,8 @@ namespace Ink_Canvas
                 {
                     return;
                 }
+                //EraserContainer.Background = null;
+                ImageEraser.Visibility = Visibility.Visible;
                 if (isWaitUntilNextTouchDown) return;
                 if (dec.Count > 1)
                 {
@@ -3614,6 +4551,7 @@ namespace Ink_Canvas
             switch (drawingShapeMode)
             {
                 case 1:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     pointList = new List<System.Windows.Point>{
                         new System.Windows.Point(iniP.X, iniP.Y),
                         new System.Windows.Point(endP.X, endP.Y)
@@ -3632,6 +4570,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(stroke);
                     break;
                 case 8:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     strokes.Add(GenerateDashedLineStrokeCollection(iniP, endP));
                     try
                     {
@@ -3642,6 +4581,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 18:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     strokes.Add(GenerateDotLineStrokeCollection(iniP, endP));
                     try
                     {
@@ -3652,6 +4592,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 2:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     double w = 30, h = 10;
                     double theta = Math.Atan2(iniP.Y - endP.Y, iniP.X - endP.X);
                     double sint = Math.Sin(theta);
@@ -3679,6 +4620,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(stroke);
                     break;
                 case 15:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     double d = GetDistance(iniP, endP);
                     if (d == 0) return;
                     double sinTheta = (iniP.Y - endP.Y) / d;
@@ -3731,6 +4673,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 11:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     strokes.Add(GenerateArrowLineStroke(new Point(2 * iniP.X - (endP.X - 20), iniP.Y), new Point(endP.X, iniP.Y)));
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X, 2 * iniP.Y - (endP.Y + 20)), new Point(iniP.X, endP.Y)));
                     try
@@ -3742,6 +4685,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 12:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     if (Math.Abs(iniP.X - endP.X) < 0.01) return;
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X + (iniP.X - endP.X) / Math.Abs(iniP.X - endP.X) * 25, iniP.Y), new Point(endP.X, iniP.Y)));
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X, 2 * iniP.Y - (endP.Y + 20)), new Point(iniP.X, endP.Y)));
@@ -3754,6 +4698,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 13:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     if (Math.Abs(iniP.Y - endP.Y) < 0.01) return;
                     strokes.Add(GenerateArrowLineStroke(new Point(2 * iniP.X - (endP.X - 20), iniP.Y), new Point(endP.X, iniP.Y)));
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X, iniP.Y + (iniP.Y - endP.Y) / Math.Abs(iniP.Y - endP.Y) * 25), new Point(iniP.X, endP.Y)));
@@ -3766,6 +4711,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 14:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     if (Math.Abs(iniP.X - endP.X) < 0.01 || Math.Abs(iniP.Y - endP.Y) < 0.01) return;
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X + (iniP.X - endP.X) / Math.Abs(iniP.X - endP.X) * 25, iniP.Y), new Point(endP.X, iniP.Y)));
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X, iniP.Y + (iniP.Y - endP.Y) / Math.Abs(iniP.Y - endP.Y) * 25), new Point(iniP.X, endP.Y)));
@@ -3778,6 +4724,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 17:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X, iniP.Y), new Point(iniP.X + Math.Abs(endP.X - iniP.X), iniP.Y)));
                     strokes.Add(GenerateArrowLineStroke(new Point(iniP.X, iniP.Y), new Point(iniP.X, iniP.Y - Math.Abs(endP.Y - iniP.Y))));
                     d = (Math.Abs(iniP.X - endP.X) + Math.Abs(iniP.Y - endP.Y)) / 2;
@@ -3791,6 +4738,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 3:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     pointList = new List<System.Windows.Point>{
                         new System.Windows.Point(iniP.X, iniP.Y),
                         new System.Windows.Point(iniP.X, endP.Y),
@@ -3812,6 +4760,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(stroke);
                     break;
                 case 19:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     double a = iniP.X - endP.X;
                     double b = iniP.Y - endP.Y;
                     pointList = new List<System.Windows.Point>{
@@ -3835,6 +4784,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(stroke);
                     break;
                 case 4:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     pointList = GenerateEllipseGeometry(iniP, endP);
                     point = new StylusPointCollection(pointList);
                     stroke = new Stroke(point)
@@ -3850,6 +4800,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(stroke);
                     break;
                 case 5:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     double R = GetDistance(iniP, endP);
                     pointList = GenerateEllipseGeometry(new Point(iniP.X - R, iniP.Y - R), new Point(iniP.X + R, iniP.Y + R));
                     point = new StylusPointCollection(pointList);
@@ -3866,6 +4817,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(stroke);
                     break;
                 case 16:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     double halfA = endP.X - iniP.X;
                     double halfB = endP.Y - iniP.Y;
                     pointList = GenerateEllipseGeometry(new Point(iniP.X - halfA, iniP.Y - halfB), new Point(iniP.X + halfA, iniP.Y + halfB));
@@ -3883,6 +4835,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(stroke);
                     break;
                 case 23:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     a = Math.Abs(endP.X - iniP.X);
                     b = Math.Abs(endP.Y - iniP.Y);
                     pointList = GenerateEllipseGeometry(new Point(iniP.X - a, iniP.Y - b), new Point(iniP.X + a, iniP.Y + b));
@@ -3941,6 +4894,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 10:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     R = GetDistance(iniP, endP);
                     strokes = GenerateDashedLineEllipseStrokeCollection(new Point(iniP.X - R, iniP.Y - R), new Point(iniP.X + R, iniP.Y + R));
                     try
@@ -3953,6 +4907,7 @@ namespace Ink_Canvas
                     break;
                 case 24:
                 case 25:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     //双曲线 x^2/a^2 - y^2/b^2 = 1
                     if (Math.Abs(iniP.X - endP.X) < 0.01 || Math.Abs(iniP.Y - endP.Y) < 0.01) return;
                     var pointList2 = new List<Point>();
@@ -3971,16 +4926,34 @@ namespace Ink_Canvas
                     {
                         //第二笔：画双曲线
                         double k = drawMultiStepShapeSpecialParameter3;
-                        a = Math.Sqrt(Math.Abs((endP.X - iniP.X) * (endP.X - iniP.X) - (endP.Y - iniP.Y) * (endP.Y - iniP.Y) / (k * k)));
-                        b = a * k;
-                        pointList = new List<Point>();
-                        for (double i = a; i <= Math.Abs(endP.X - iniP.X); i += 0.5)
-                        {
-                            double rY = Math.Sqrt(Math.Abs(k * k * i * i - b * b));
-                            pointList.Add(new Point(iniP.X + i, iniP.Y - rY));
-                            pointList2.Add(new Point(iniP.X + i, iniP.Y + rY));
-                            pointList3.Add(new Point(iniP.X - i, iniP.Y - rY));
-                            pointList4.Add(new Point(iniP.X - i, iniP.Y + rY));
+                        bool isHyperbolaFocalPointOnXAxis = Math.Abs((endP.Y - iniP.Y) / (endP.X - iniP.X)) < k;
+                        if (isHyperbolaFocalPointOnXAxis)
+                        { // 焦点在 x 轴上
+                            a = Math.Sqrt(Math.Abs((endP.X - iniP.X) * (endP.X - iniP.X) - (endP.Y - iniP.Y) * (endP.Y - iniP.Y) / (k * k)));
+                            b = a * k;
+                            pointList = new List<Point>();
+                            for (double i = a; i <= Math.Abs(endP.X - iniP.X); i += 0.5)
+                            {
+                                double rY = Math.Sqrt(Math.Abs(k * k * i * i - b * b));
+                                pointList.Add(new Point(iniP.X + i, iniP.Y - rY));
+                                pointList2.Add(new Point(iniP.X + i, iniP.Y + rY));
+                                pointList3.Add(new Point(iniP.X - i, iniP.Y - rY));
+                                pointList4.Add(new Point(iniP.X - i, iniP.Y + rY));
+                            }
+                        }
+                        else
+                        { // 焦点在 y 轴上
+                            a = Math.Sqrt(Math.Abs((endP.Y - iniP.Y) * (endP.Y - iniP.Y) - (endP.X - iniP.X) * (endP.X - iniP.X) * (k * k)));
+                            b = a / k;
+                            pointList = new List<Point>();
+                            for (double i = a; i <= Math.Abs(endP.Y - iniP.Y); i += 0.5)
+                            {
+                                double rX = Math.Sqrt(Math.Abs(i * i / k / k - b * b));
+                                pointList.Add(new Point(iniP.X - rX, iniP.Y + i));
+                                pointList2.Add(new Point(iniP.X + rX, iniP.Y + i));
+                                pointList3.Add(new Point(iniP.X - rX, iniP.Y - i));
+                                pointList4.Add(new Point(iniP.X + rX, iniP.Y - i));
+                            }
                         }
                         try
                         {
@@ -4000,12 +4973,12 @@ namespace Ink_Canvas
                             {
                                 //画焦点
                                 c = Math.Sqrt(a * a + b * b);
-                                stylusPoint = new StylusPoint(iniP.X + c, iniP.Y, (float)1.0);
+                                stylusPoint = isHyperbolaFocalPointOnXAxis ? new StylusPoint(iniP.X + c, iniP.Y, (float)1.0) : new StylusPoint(iniP.X, iniP.Y + c, (float)1.0);
                                 point = new StylusPointCollection();
                                 point.Add(stylusPoint);
                                 stroke = new Stroke(point) { DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone() };
                                 strokes.Add(stroke.Clone());
-                                stylusPoint = new StylusPoint(iniP.X - c, iniP.Y, (float)1.0);
+                                stylusPoint = isHyperbolaFocalPointOnXAxis ? new StylusPoint(iniP.X - c, iniP.Y, (float)1.0) : new StylusPoint(iniP.X, iniP.Y - c, (float)1.0);
                                 point = new StylusPointCollection();
                                 point.Add(stylusPoint);
                                 stroke = new Stroke(point) { DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone() };
@@ -4026,6 +4999,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 20:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     //抛物线 y=ax^2
                     if (Math.Abs(iniP.X - endP.X) < 0.01 || Math.Abs(iniP.Y - endP.Y) < 0.01) return;
                     a = (iniP.Y - endP.Y) / ((iniP.X - endP.X) * (iniP.X - endP.X));
@@ -4057,6 +5031,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 21:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     //抛物线 y^2=ax
                     if (Math.Abs(iniP.X - endP.X) < 0.01 || Math.Abs(iniP.Y - endP.Y) < 0.01) return;
                     a = (iniP.X - endP.X) / ((iniP.Y - endP.Y) * (iniP.Y - endP.Y));
@@ -4088,6 +5063,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 22:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     //抛物线 y^2=ax, 含焦点
                     if (Math.Abs(iniP.X - endP.X) < 0.01 || Math.Abs(iniP.Y - endP.Y) < 0.01) return;
                     double p = (iniP.Y - endP.Y) * (iniP.Y - endP.Y) / (2 * (iniP.X - endP.X));
@@ -4128,6 +5104,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 6:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     newIniP = iniP;
                     if (iniP.Y > endP.Y)
                     {
@@ -4184,6 +5161,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 7:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     if (iniP.Y > endP.Y)
                     {
                         newIniP = new Point(iniP.X, endP.Y);
@@ -4231,6 +5209,7 @@ namespace Ink_Canvas
                     inkCanvas.Strokes.Add(strokes);
                     break;
                 case 9:
+                    _currentCommitType = CommitReason.ShapeDrawing;
                     if (isFirstTouchCuboid)
                     {
                         //分开画线条方便后期单独擦除某一条棱
@@ -4505,11 +5484,11 @@ namespace Ink_Canvas
         bool isMouseDown = false;
         private void inkCanvas_MouseDown(object sender, MouseButtonEventArgs e)
         {
+            isMouseDown = true;
             if (NeedUpdateIniP())
             {
                 iniP = e.GetPosition(inkCanvas);
             }
-            isMouseDown = true;
         }
 
         private void inkCanvas_MouseMove(object sender, MouseEventArgs e)
@@ -4530,8 +5509,6 @@ namespace Ink_Canvas
                                             (circle.Stroke.StylusPoints[0].Y + circle.Stroke.StylusPoints[circle.Stroke.StylusPoints.Count / 2].Y) / 2);
                 circles.Add(circle);
             }
-            lastTempStroke = null;
-            lastTempStrokeCollection = null;
             if (drawingShapeMode != 9 && drawingShapeMode != 0 && drawingShapeMode != 24 && drawingShapeMode != 25)
             {
                 if (isLongPressSelected)
@@ -4547,15 +5524,24 @@ namespace Ink_Canvas
             {
                 if (isFirstTouchCuboid)
                 {
+                    if (CuboidStrokeCollection == null) CuboidStrokeCollection = new StrokeCollection();
                     isFirstTouchCuboid = false;
                     Point newIniP = new Point(Math.Min(CuboidFrontRectIniP.X, CuboidFrontRectEndP.X), Math.Min(CuboidFrontRectIniP.Y, CuboidFrontRectEndP.Y));
                     Point newEndP = new Point(Math.Max(CuboidFrontRectIniP.X, CuboidFrontRectEndP.X), Math.Max(CuboidFrontRectIniP.Y, CuboidFrontRectEndP.Y));
                     CuboidFrontRectIniP = newIniP;
                     CuboidFrontRectEndP = newEndP;
+                    CuboidStrokeCollection.Add(lastTempStrokeCollection);
                 }
                 else
                 {
                     BtnPen_Click(null, null); //画完还原到笔模式
+                    if (_currentCommitType == CommitReason.ShapeDrawing)
+                    {
+                        CuboidStrokeCollection.Add(lastTempStrokeCollection);
+                        _currentCommitType = CommitReason.UserInput;
+                        timeMachine.CommitStrokeUserInputHistory(CuboidStrokeCollection);
+                        CuboidStrokeCollection = null;
+                    }
                 }
             }
             if (drawingShapeMode == 24 || drawingShapeMode == 25)
@@ -4567,15 +5553,73 @@ namespace Ink_Canvas
                 else
                 {
                     drawMultiStepShapeCurrentStep = 0;
-                    try
+                    if (drawMultiStepShapeSpecialStrokeCollection != null)
                     {
-                        inkCanvas.Strokes.Remove(drawMultiStepShapeSpecialStrokeCollection);
+                        bool opFlag = false;
+                        switch (Settings.Canvas.HyperbolaAsymptoteOption)
+                        {
+                            case OptionalOperation.Yes:
+                                opFlag = true;
+                                break;
+                            case OptionalOperation.No:
+                                opFlag = false;
+                                break;
+                            case OptionalOperation.Ask:
+                                opFlag = MessageBox.Show("是否移除渐近线？", "Ink Canvas", MessageBoxButton.YesNo) != MessageBoxResult.Yes;
+                                break;
+                        };
+                        if (!opFlag)
+                        {
+                            inkCanvas.Strokes.Remove(drawMultiStepShapeSpecialStrokeCollection);
+                        }
                     }
-                    catch { }
                     BtnPen_Click(null, null); //画完还原到笔模式
                 }
             }
             isMouseDown = false;
+            if (ReplacedStroke != null || AddedStroke != null)
+            {
+                timeMachine.CommitStrokeEraseHistory(ReplacedStroke, AddedStroke);
+                AddedStroke = null;
+                ReplacedStroke = null;
+            }
+            if (_currentCommitType == CommitReason.ShapeDrawing && drawingShapeMode != 9)
+            {
+                _currentCommitType = CommitReason.UserInput;
+                StrokeCollection collection = null;
+                if (lastTempStrokeCollection != null && lastTempStrokeCollection.Count > 0)
+                {
+                    collection = lastTempStrokeCollection;
+                }
+                else if (lastTempStroke != null)
+                {
+                    collection = new StrokeCollection() { lastTempStroke };
+                }
+                if (collection != null)
+                {
+                    timeMachine.CommitStrokeUserInputHistory(collection);
+                }
+            }
+            lastTempStroke = null;
+            lastTempStrokeCollection = null;
+            if (StrokeManipulationHistory?.Count > 0)
+            {
+                timeMachine.CommitStrokeManipulationHistory(StrokeManipulationHistory);
+                foreach (var item in StrokeManipulationHistory)
+                {
+                    StrokeInitialHistory[item.Key] = item.Value.Item2;
+                }
+                StrokeManipulationHistory = null;
+            }
+            if (DrawingAttributesHistory.Count > 0)
+            {
+                timeMachine.CommitStrokeDrawingAttributesHistory(DrawingAttributesHistory);
+                DrawingAttributesHistory = new Dictionary<Stroke, Tuple<DrawingAttributes, DrawingAttributes>>();
+                foreach (var item in DrawingAttributesHistoryFlag)
+                {
+                    item.Value.Clear();
+                }
+            }
         }
 
         private bool NeedUpdateIniP()
@@ -4597,43 +5641,55 @@ namespace Ink_Canvas
 
         int CurrentWhiteboardIndex = 1;
         int WhiteboardTotalCount = 1;
-        MemoryStream[] WhiteboardStrokesStreams = new MemoryStream[101]; //最多99页，0用来存储非白板时的墨迹以便还原
+        TimeMachineHistory[][] TimeMachineHistories = new TimeMachineHistory[101][]; //最多99页，0用来存储非白板时的墨迹以便还原
 
         private void SaveStrokes(bool isBackupMain = false)
         {
-            MemoryStream ms = new MemoryStream();
-            inkCanvas.Strokes.Save(ms);
-            ms.Position = 0;
             if (isBackupMain)
             {
-                WhiteboardStrokesStreams[0] = ms;
+                var timeMachineHistory = timeMachine.ExportTimeMachineHistory();
+                TimeMachineHistories[0] = timeMachineHistory;
+                timeMachine.ClearStrokeHistory();
+
             }
             else
             {
-                WhiteboardStrokesStreams[CurrentWhiteboardIndex] = ms;
+                var timeMachineHistory = timeMachine.ExportTimeMachineHistory();
+                TimeMachineHistories[CurrentWhiteboardIndex] = timeMachineHistory;
+                timeMachine.ClearStrokeHistory();
             }
+        }
+
+        private void ClearStrokes(bool isErasedByCode)
+        {
+
+            _currentCommitType = CommitReason.ClearingCanvas;
+            if (isErasedByCode) _currentCommitType = CommitReason.CodeInput;
+            inkCanvas.Strokes.Clear();
+            _currentCommitType = CommitReason.UserInput;
         }
 
         private void RestoreStrokes(bool isBackupMain = false)
         {
             try
             {
-	    	if (WhiteboardStrokesStreams[CurrentWhiteboardIndex] == null) return; //防止白板打开后不居中
+                if (TimeMachineHistories[CurrentWhiteboardIndex] == null) return; //防止白板打开后不居中
                 if (isBackupMain)
                 {
-                    if (WhiteboardStrokesStreams[0].Length > 0)
+                    timeMachine.ImportTimeMachineHistory(TimeMachineHistories[0]);
+                    foreach (var item in TimeMachineHistories[0])
                     {
-                        inkCanvas.Strokes = new System.Windows.Ink.StrokeCollection(WhiteboardStrokesStreams[0]);
+                        ApplyHistoryToCanvas(item);
                     }
                 }
                 else
                 {
-                    if (WhiteboardStrokesStreams[CurrentWhiteboardIndex].Length > 0)
+                    timeMachine.ImportTimeMachineHistory(TimeMachineHistories[CurrentWhiteboardIndex]);
+                    foreach (var item in TimeMachineHistories[CurrentWhiteboardIndex])
                     {
-                        inkCanvas.Strokes = new System.Windows.Ink.StrokeCollection(WhiteboardStrokesStreams[CurrentWhiteboardIndex]);
+                        ApplyHistoryToCanvas(item);
                     }
                 }
-                AdjustStrokeColor();
             }
             catch { }
         }
@@ -4644,7 +5700,7 @@ namespace Ink_Canvas
 
             SaveStrokes();
 
-            inkCanvas.Strokes.Clear();
+            ClearStrokes(true);
             CurrentWhiteboardIndex--;
 
             RestoreStrokes();
@@ -4654,15 +5710,20 @@ namespace Ink_Canvas
 
         private void BtnWhiteBoardSwitchNext_Click(object sender, EventArgs e)
         {
+            if (Settings.Automation.IsAutoSaveStrokesAtClear && inkCanvas.Strokes.Count > Settings.Automation.MinimumAutomationStrokeNumber)
+            {
+                SaveScreenShot(true);
+                if (Settings.Automation.IsAutoSaveStrokesAtScreenshot) SaveInkCanvasStrokes(false);
+            }
             if (CurrentWhiteboardIndex >= WhiteboardTotalCount)
             {
                 BtnWhiteBoardAdd_Click(sender, e);
                 return;
             }
-
             SaveStrokes();
 
-            inkCanvas.Strokes.Clear();
+
+            ClearStrokes(true);
             CurrentWhiteboardIndex++;
 
             RestoreStrokes();
@@ -4673,9 +5734,13 @@ namespace Ink_Canvas
         private void BtnWhiteBoardAdd_Click(object sender, EventArgs e)
         {
             if (WhiteboardTotalCount >= 99) return;
-
+            if (Settings.Automation.IsAutoSaveStrokesAtClear && inkCanvas.Strokes.Count > Settings.Automation.MinimumAutomationStrokeNumber)
+            {
+                SaveScreenShot(true);
+                if (Settings.Automation.IsAutoSaveStrokesAtScreenshot) SaveInkCanvasStrokes(false);
+            }
             SaveStrokes();
-            inkCanvas.Strokes.Clear();
+            ClearStrokes(true);
 
             WhiteboardTotalCount++;
             CurrentWhiteboardIndex++;
@@ -4684,11 +5749,9 @@ namespace Ink_Canvas
             {
                 for (int i = WhiteboardTotalCount; i > CurrentWhiteboardIndex; i--)
                 {
-                    WhiteboardStrokesStreams[i] = WhiteboardStrokesStreams[i - 1];
+                    TimeMachineHistories[i] = TimeMachineHistories[i - 1];
                 }
             }
-
-            WhiteboardStrokesStreams[CurrentWhiteboardIndex] = new MemoryStream();
 
             UpdateIndexInfoDisplay();
 
@@ -4697,13 +5760,13 @@ namespace Ink_Canvas
 
         private void BtnWhiteBoardDelete_Click(object sender, RoutedEventArgs e)
         {
-            inkCanvas.Strokes.Clear();
+            ClearStrokes(true);
 
             if (CurrentWhiteboardIndex != WhiteboardTotalCount)
             {
                 for (int i = CurrentWhiteboardIndex; i <= WhiteboardTotalCount; i++)
                 {
-                    WhiteboardStrokesStreams[i] = WhiteboardStrokesStreams[i + 1];
+                    TimeMachineHistories[i] = TimeMachineHistories[i + 1];
                 }
             }
             else
@@ -4722,12 +5785,6 @@ namespace Ink_Canvas
 
         private void UpdateIndexInfoDisplay()
         {
-            BtnUndo.IsEnabled = false;
-            BtnUndo.Visibility = Visibility.Visible;
-
-            BtnRedo.IsEnabled = false;
-            BtnRedo.Visibility = Visibility.Collapsed;
-
             TextBlockWhiteBoardIndexInfo.Text = string.Format("{0} / {1}", CurrentWhiteboardIndex, WhiteboardTotalCount);
 
             if (CurrentWhiteboardIndex == 1)
@@ -4758,6 +5815,54 @@ namespace Ink_Canvas
             }
         }
 
+        private void SetColors()
+        {
+            if (currentMode != 0 && !Settings.Canvas.UsingWhiteboard)
+            {
+                if (File.Exists(App.RootPath + "Colors\\Light.ini"))
+                {
+                    try
+                    {
+                        string[] lightColors = File.ReadAllLines(App.RootPath + "Colors\\Light.ini");
+                        BtnColorRed.Background = new SolidColorBrush(StringToColor(lightColors[0]));
+                        BtnColorGreen.Background = new SolidColorBrush(StringToColor(lightColors[1]));
+                        BtnColorBlue.Background = new SolidColorBrush(StringToColor(lightColors[2]));
+                        BtnColorYellow.Background = new SolidColorBrush(StringToColor(lightColors[3]));
+                    }
+                    catch (Exception) { ShowNotification("读取亮色画笔颜色配置文件时遇到问题"); }
+                }
+                else
+                {
+                    BtnColorRed.Background = new SolidColorBrush(StringToColor("#FFFF3333"));
+                    BtnColorGreen.Background = new SolidColorBrush(StringToColor("#FF1ED760"));
+                    BtnColorBlue.Background = new SolidColorBrush(StringToColor("#FF239AD6"));
+                    BtnColorYellow.Background = new SolidColorBrush(StringToColor("#FFFFC000"));
+                }
+            }
+            else
+            {
+                if (File.Exists(App.RootPath + "Colors\\Dark.ini"))
+                {
+                    try
+                    {
+                        string[] darkColors = File.ReadAllLines(App.RootPath + "Colors\\Dark.ini");
+                        BtnColorRed.Background = new SolidColorBrush(StringToColor(darkColors[0]));
+                        BtnColorGreen.Background = new SolidColorBrush(StringToColor(darkColors[1]));
+                        BtnColorBlue.Background = new SolidColorBrush(StringToColor(darkColors[2]));
+                        BtnColorYellow.Background = new SolidColorBrush(StringToColor(darkColors[3]));
+                    }
+                    catch (Exception) { ShowNotification("读取深色画笔颜色配置文件时遇到问题"); }
+                }
+                else
+                {
+                    BtnColorRed.Background = new SolidColorBrush(Colors.Red);
+                    BtnColorGreen.Background = new SolidColorBrush(StringToColor("#FF169141"));
+                    BtnColorBlue.Background = new SolidColorBrush(StringToColor("#FF239AD6"));
+                    BtnColorYellow.Background = new SolidColorBrush(StringToColor("#FFF38B00"));
+                }
+            }
+        }
+
         #endregion Whiteboard Controls
 
         #region Simulate Pen Pressure & Ink To Shape
@@ -4771,291 +5876,313 @@ namespace Ink_Canvas
             try
             {
                 inkCanvas.Opacity = 1;
-                if (Settings.InkToShape.IsInkToShapeEnabled)
+                if (Settings.InkToShape.IsInkToShapeEnabled && !Environment.Is64BitProcess)
                 {
-                    try
+                    void InkToShapeProcess()
                     {
-                        newStrokes.Add(e.Stroke);
-                        if (newStrokes.Count > 4) newStrokes.RemoveAt(0);
-                        for (int i = 0; i < newStrokes.Count; i++)
+                        try
                         {
-                            if (!inkCanvas.Strokes.Contains(newStrokes[i])) newStrokes.RemoveAt(i--);
-                        }
-                        for (int i = 0; i < circles.Count; i++)
-                        {
-                            if (!inkCanvas.Strokes.Contains(circles[i].Stroke)) circles.RemoveAt(i);
-                        }
-                        var strokeReco = new StrokeCollection();
-                        var result = InkRecognizeHelper.RecognizeShape(newStrokes);
-                        for (int i = newStrokes.Count - 1; i >= 0; i--)
-                        {
-                            strokeReco.Add(newStrokes[i]);
-                            var newResult = InkRecognizeHelper.RecognizeShape(strokeReco);
-                            if (newResult.InkDrawingNode.GetShapeName() == "Circle" || newResult.InkDrawingNode.GetShapeName() == "Ellipse")
+                            newStrokes.Add(e.Stroke);
+                            if (newStrokes.Count > 4) newStrokes.RemoveAt(0);
+                            for (int i = 0; i < newStrokes.Count; i++)
                             {
-                                result = newResult;
-                                break;
+                                if (!inkCanvas.Strokes.Contains(newStrokes[i])) newStrokes.RemoveAt(i--);
                             }
-                            //Label.Visibility = Visibility.Visible;
-                            Label.Content = circles.Count.ToString() + "\n" + newResult.InkDrawingNode.GetShapeName();
-                        }
-                        if (result.InkDrawingNode.GetShapeName() == "Circle")
-                        {
-                            var shape = result.InkDrawingNode.GetShape();
-                            if (shape.Width > 75)
+                            for (int i = 0; i < circles.Count; i++)
                             {
-                                foreach (Circle circle in circles)
+                                if (!inkCanvas.Strokes.Contains(circles[i].Stroke)) circles.RemoveAt(i);
+                            }
+                            var strokeReco = new StrokeCollection();
+                            var result = InkRecognizeHelper.RecognizeShape(newStrokes);
+                            for (int i = newStrokes.Count - 1; i >= 0; i--)
+                            {
+                                strokeReco.Add(newStrokes[i]);
+                                var newResult = InkRecognizeHelper.RecognizeShape(strokeReco);
+                                if (newResult.InkDrawingNode.GetShapeName() == "Circle" || newResult.InkDrawingNode.GetShapeName() == "Ellipse")
                                 {
-                                    //判断是否画同心圆
-                                    if (Math.Abs(result.Centroid.X - circle.Centroid.X) / shape.Width < 0.12 &&
-                                        Math.Abs(result.Centroid.Y - circle.Centroid.Y) / shape.Width < 0.12)
-                                    {
-                                        result.Centroid = circle.Centroid;
-                                        break;
-                                    }
-                                    else
-                                    {
-                                        double d = (result.Centroid.X - circle.Centroid.X) * (result.Centroid.X - circle.Centroid.X) +
-                                           (result.Centroid.Y - circle.Centroid.Y) * (result.Centroid.Y - circle.Centroid.Y);
-                                        d = Math.Sqrt(d);
-                                        //判断是否画外切圆
-                                        double x = shape.Width / 2.0 + circle.R - d;
-                                        if (Math.Abs(x) / shape.Width < 0.1)
-                                        {
-                                            double sinTheta = (result.Centroid.Y - circle.Centroid.Y) / d;
-                                            double cosTheta = (result.Centroid.X - circle.Centroid.X) / d;
-                                            double newX = result.Centroid.X + x * cosTheta;
-                                            double newY = result.Centroid.Y + x * sinTheta;
-                                            result.Centroid = new Point(newX, newY);
-                                        }
-                                        //判断是否画外切圆
-                                        x = Math.Abs(circle.R - shape.Width / 2.0) - d;
-                                        if (Math.Abs(x) / shape.Width < 0.1)
-                                        {
-                                            double sinTheta = (result.Centroid.Y - circle.Centroid.Y) / d;
-                                            double cosTheta = (result.Centroid.X - circle.Centroid.X) / d;
-                                            double newX = result.Centroid.X + x * cosTheta;
-                                            double newY = result.Centroid.Y + x * sinTheta;
-                                            result.Centroid = new Point(newX, newY);
-                                        }
-                                    }
+                                    result = newResult;
+                                    break;
                                 }
-
-                                Point iniP = new Point(result.Centroid.X - shape.Width / 2, result.Centroid.Y - shape.Height / 2);
-                                Point endP = new Point(result.Centroid.X + shape.Width / 2, result.Centroid.Y + shape.Height / 2);
-                                var pointList = GenerateEllipseGeometry(iniP, endP);
-                                var point = new StylusPointCollection(pointList);
-                                var stroke = new Stroke(point)
-                                {
-                                    DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
-                                };
-                                circles.Add(new Circle(result.Centroid, shape.Width / 2.0, stroke));
-                                SetNewBackupOfStroke();
-                                inkCanvas.Strokes.Add(stroke);
-                                inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
-                                newStrokes = new StrokeCollection();
+                                //Label.Visibility = Visibility.Visible;
+                                Label.Content = circles.Count.ToString() + "\n" + newResult.InkDrawingNode.GetShapeName();
                             }
-                        }
-                        else if (result.InkDrawingNode.GetShapeName().Contains("Ellipse"))
-                        {
-                            var shape = result.InkDrawingNode.GetShape();
-                            //var shape1 = result.InkDrawingNode.GetShape();
-                            //shape1.Fill = Brushes.Gray;
-                            //Canvas.Children.Add(shape1);
-                            var p = result.InkDrawingNode.HotPoints;
-                            double a = GetDistance(p[0], p[2]) / 2; //长半轴
-                            double b = GetDistance(p[1], p[3]) / 2; //短半轴
-                            if (a < b)
+                            if (result.InkDrawingNode.GetShapeName() == "Circle")
                             {
-                                double t = a;
-                                a = b;
-                                b = t;
-                            }
-
-                            result.Centroid = new Point((p[0].X + p[2].X) / 2, (p[0].Y + p[2].Y) / 2);
-                            bool needRotation = true;
-
-                            if (shape.Width > 75 || shape.Height > 75 && p.Count == 4)
-                            {
-                                Point iniP = new Point(result.Centroid.X - shape.Width / 2, result.Centroid.Y - shape.Height / 2);
-                                Point endP = new Point(result.Centroid.X + shape.Width / 2, result.Centroid.Y + shape.Height / 2);
-
-                                foreach (Circle circle in circles)
+                                var shape = result.InkDrawingNode.GetShape();
+                                if (shape.Width > 75)
                                 {
-                                    //判断是否画同心椭圆
-                                    if (Math.Abs(result.Centroid.X - circle.Centroid.X) / a < 0.2 &&
-                                        Math.Abs(result.Centroid.Y - circle.Centroid.Y) / a < 0.2)
+                                    foreach (Circle circle in circles)
                                     {
-                                        result.Centroid = circle.Centroid;
-                                        iniP = new Point(result.Centroid.X - shape.Width / 2, result.Centroid.Y - shape.Height / 2);
-                                        endP = new Point(result.Centroid.X + shape.Width / 2, result.Centroid.Y + shape.Height / 2);
-
-                                        //再判断是否与圆相切
-                                        if (Math.Abs(a - circle.R) / a < 0.2)
+                                        //判断是否画同心圆
+                                        if (Math.Abs(result.Centroid.X - circle.Centroid.X) / shape.Width < 0.12 &&
+                                            Math.Abs(result.Centroid.Y - circle.Centroid.Y) / shape.Width < 0.12)
                                         {
-                                            if (shape.Width >= shape.Height)
+                                            result.Centroid = circle.Centroid;
+                                            break;
+                                        }
+                                        else
+                                        {
+                                            double d = (result.Centroid.X - circle.Centroid.X) * (result.Centroid.X - circle.Centroid.X) +
+                                               (result.Centroid.Y - circle.Centroid.Y) * (result.Centroid.Y - circle.Centroid.Y);
+                                            d = Math.Sqrt(d);
+                                            //判断是否画外切圆
+                                            double x = shape.Width / 2.0 + circle.R - d;
+                                            if (Math.Abs(x) / shape.Width < 0.1)
                                             {
-                                                iniP.X = result.Centroid.X - circle.R;
-                                                endP.X = result.Centroid.X + circle.R;
-                                                iniP.Y = result.Centroid.Y - b;
-                                                endP.Y = result.Centroid.Y + b;
+                                                double sinTheta = (result.Centroid.Y - circle.Centroid.Y) / d;
+                                                double cosTheta = (result.Centroid.X - circle.Centroid.X) / d;
+                                                double newX = result.Centroid.X + x * cosTheta;
+                                                double newY = result.Centroid.Y + x * sinTheta;
+                                                result.Centroid = new Point(newX, newY);
                                             }
-                                            else
+                                            //判断是否画外切圆
+                                            x = Math.Abs(circle.R - shape.Width / 2.0) - d;
+                                            if (Math.Abs(x) / shape.Width < 0.1)
                                             {
-                                                iniP.Y = result.Centroid.Y - circle.R;
-                                                endP.Y = result.Centroid.Y + circle.R;
-                                                iniP.X = result.Centroid.X - a;
-                                                endP.X = result.Centroid.X + a;
+                                                double sinTheta = (result.Centroid.Y - circle.Centroid.Y) / d;
+                                                double cosTheta = (result.Centroid.X - circle.Centroid.X) / d;
+                                                double newX = result.Centroid.X + x * cosTheta;
+                                                double newY = result.Centroid.Y + x * sinTheta;
+                                                result.Centroid = new Point(newX, newY);
                                             }
                                         }
-                                        break;
                                     }
-                                    else if (Math.Abs(result.Centroid.X - circle.Centroid.X) / a < 0.2)
+
+                                    Point iniP = new Point(result.Centroid.X - shape.Width / 2, result.Centroid.Y - shape.Height / 2);
+                                    Point endP = new Point(result.Centroid.X + shape.Width / 2, result.Centroid.Y + shape.Height / 2);
+                                    var pointList = GenerateEllipseGeometry(iniP, endP);
+                                    var point = new StylusPointCollection(pointList);
+                                    var stroke = new Stroke(point)
                                     {
-                                        double sinTheta = Math.Abs(circle.Centroid.Y - result.Centroid.Y) / circle.R;
-                                        double cosTheta = Math.Sqrt(1 - sinTheta * sinTheta);
-                                        double newA = circle.R * cosTheta;
-                                        if (circle.R * sinTheta / circle.R < 0.9 && a / b > 2 && Math.Abs(newA - a) / newA < 0.3)
+                                        DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
+                                    };
+                                    circles.Add(new Circle(result.Centroid, shape.Width / 2.0, stroke));
+                                    SetNewBackupOfStroke();
+                                    _currentCommitType = CommitReason.ShapeRecognition;
+                                    inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
+                                    inkCanvas.Strokes.Add(stroke);
+                                    _currentCommitType = CommitReason.UserInput;
+                                    newStrokes = new StrokeCollection();
+                                }
+                            }
+                            else if (result.InkDrawingNode.GetShapeName().Contains("Ellipse"))
+                            {
+                                var shape = result.InkDrawingNode.GetShape();
+                                //var shape1 = result.InkDrawingNode.GetShape();
+                                //shape1.Fill = Brushes.Gray;
+                                //Canvas.Children.Add(shape1);
+                                var p = result.InkDrawingNode.HotPoints;
+                                double a = GetDistance(p[0], p[2]) / 2; //长半轴
+                                double b = GetDistance(p[1], p[3]) / 2; //短半轴
+                                if (a < b)
+                                {
+                                    double t = a;
+                                    a = b;
+                                    b = t;
+                                }
+
+                                result.Centroid = new Point((p[0].X + p[2].X) / 2, (p[0].Y + p[2].Y) / 2);
+                                bool needRotation = true;
+
+                                if (shape.Width > 75 || shape.Height > 75 && p.Count == 4)
+                                {
+                                    Point iniP = new Point(result.Centroid.X - shape.Width / 2, result.Centroid.Y - shape.Height / 2);
+                                    Point endP = new Point(result.Centroid.X + shape.Width / 2, result.Centroid.Y + shape.Height / 2);
+
+                                    foreach (Circle circle in circles)
+                                    {
+                                        //判断是否画同心椭圆
+                                        if (Math.Abs(result.Centroid.X - circle.Centroid.X) / a < 0.2 &&
+                                            Math.Abs(result.Centroid.Y - circle.Centroid.Y) / a < 0.2)
                                         {
-                                            iniP.X = circle.Centroid.X - newA;
-                                            endP.X = circle.Centroid.X + newA;
-                                            iniP.Y = result.Centroid.Y - newA / 5;
-                                            endP.Y = result.Centroid.Y + newA / 5;
+                                            result.Centroid = circle.Centroid;
+                                            iniP = new Point(result.Centroid.X - shape.Width / 2, result.Centroid.Y - shape.Height / 2);
+                                            endP = new Point(result.Centroid.X + shape.Width / 2, result.Centroid.Y + shape.Height / 2);
 
-                                            double topB = endP.Y - iniP.Y;
-
-                                            SetNewBackupOfStroke();
-                                            inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
-                                            newStrokes = new StrokeCollection();
-
-                                            var _pointList = GenerateEllipseGeometry(iniP, endP, false, true);
-                                            var _point = new StylusPointCollection(_pointList);
-                                            var _stroke = new Stroke(_point)
+                                            //再判断是否与圆相切
+                                            if (Math.Abs(a - circle.R) / a < 0.2)
                                             {
-                                                DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
-                                            };
-                                            inkCanvas.Strokes.Add(_stroke.Clone());
-                                            inkCanvas.Strokes.Add(GenerateDashedLineEllipseStrokeCollection(iniP, endP, true, false));
-                                            return;
+                                                if (shape.Width >= shape.Height)
+                                                {
+                                                    iniP.X = result.Centroid.X - circle.R;
+                                                    endP.X = result.Centroid.X + circle.R;
+                                                    iniP.Y = result.Centroid.Y - b;
+                                                    endP.Y = result.Centroid.Y + b;
+                                                }
+                                                else
+                                                {
+                                                    iniP.Y = result.Centroid.Y - circle.R;
+                                                    endP.Y = result.Centroid.Y + circle.R;
+                                                    iniP.X = result.Centroid.X - a;
+                                                    endP.X = result.Centroid.X + a;
+                                                }
+                                            }
+                                            break;
                                         }
-                                    }
-                                    else if (Math.Abs(result.Centroid.Y - circle.Centroid.Y) / a < 0.2)
-                                    {
-                                        double cosTheta = Math.Abs(circle.Centroid.X - result.Centroid.X) / circle.R;
-                                        double sinTheta = Math.Sqrt(1 - cosTheta * cosTheta);
-                                        double newA = circle.R * sinTheta;
-                                        if (circle.R * sinTheta / circle.R < 0.9 && a / b > 2 && Math.Abs(newA - a) / newA < 0.3)
+                                        else if (Math.Abs(result.Centroid.X - circle.Centroid.X) / a < 0.2)
                                         {
-                                            iniP.X = result.Centroid.X - newA / 5;
-                                            endP.X = result.Centroid.X + newA / 5;
-                                            iniP.Y = circle.Centroid.Y - newA;
-                                            endP.Y = circle.Centroid.Y + newA;
-                                            needRotation = false;
+                                            double sinTheta = Math.Abs(circle.Centroid.Y - result.Centroid.Y) / circle.R;
+                                            double cosTheta = Math.Sqrt(1 - sinTheta * sinTheta);
+                                            double newA = circle.R * cosTheta;
+                                            if (circle.R * sinTheta / circle.R < 0.9 && a / b > 2 && Math.Abs(newA - a) / newA < 0.3)
+                                            {
+                                                iniP.X = circle.Centroid.X - newA;
+                                                endP.X = circle.Centroid.X + newA;
+                                                iniP.Y = result.Centroid.Y - newA / 5;
+                                                endP.Y = result.Centroid.Y + newA / 5;
+
+                                                double topB = endP.Y - iniP.Y;
+
+                                                SetNewBackupOfStroke();
+                                                _currentCommitType = CommitReason.ShapeRecognition;
+                                                inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
+                                                newStrokes = new StrokeCollection();
+
+                                                var _pointList = GenerateEllipseGeometry(iniP, endP, false, true);
+                                                var _point = new StylusPointCollection(_pointList);
+                                                var _stroke = new Stroke(_point)
+                                                {
+                                                    DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
+                                                };
+                                                var _dashedLineStroke = GenerateDashedLineEllipseStrokeCollection(iniP, endP, true, false);
+                                                StrokeCollection strokes = new StrokeCollection()
+                                                {
+                                                    _stroke,
+                                                    _dashedLineStroke
+                                                };
+                                                inkCanvas.Strokes.Add(strokes);
+                                                _currentCommitType = CommitReason.UserInput;
+                                                return;
+                                            }
+                                        }
+                                        else if (Math.Abs(result.Centroid.Y - circle.Centroid.Y) / a < 0.2)
+                                        {
+                                            double cosTheta = Math.Abs(circle.Centroid.X - result.Centroid.X) / circle.R;
+                                            double sinTheta = Math.Sqrt(1 - cosTheta * cosTheta);
+                                            double newA = circle.R * sinTheta;
+                                            if (circle.R * sinTheta / circle.R < 0.9 && a / b > 2 && Math.Abs(newA - a) / newA < 0.3)
+                                            {
+                                                iniP.X = result.Centroid.X - newA / 5;
+                                                endP.X = result.Centroid.X + newA / 5;
+                                                iniP.Y = circle.Centroid.Y - newA;
+                                                endP.Y = circle.Centroid.Y + newA;
+                                                needRotation = false;
+                                            }
                                         }
                                     }
+
+                                    //纠正垂直与水平关系
+                                    var newPoints = FixPointsDirection(p[0], p[2]);
+                                    p[0] = newPoints[0];
+                                    p[2] = newPoints[1];
+                                    newPoints = FixPointsDirection(p[1], p[3]);
+                                    p[1] = newPoints[0];
+                                    p[3] = newPoints[1];
+
+                                    var pointList = GenerateEllipseGeometry(iniP, endP);
+                                    var point = new StylusPointCollection(pointList);
+                                    var stroke = new Stroke(point)
+                                    {
+                                        DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
+                                    };
+
+                                    if (needRotation)
+                                    {
+                                        Matrix m = new Matrix();
+                                        FrameworkElement fe = e.Source as FrameworkElement;
+                                        double tanTheta = (p[2].Y - p[0].Y) / (p[2].X - p[0].X);
+                                        double theta = Math.Atan(tanTheta);
+                                        m.RotateAt(theta * 180.0 / Math.PI, result.Centroid.X, result.Centroid.Y);
+                                        stroke.Transform(m, false);
+                                    }
+
+                                    SetNewBackupOfStroke();
+                                    _currentCommitType = CommitReason.ShapeRecognition;
+                                    inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
+                                    inkCanvas.Strokes.Add(stroke);
+                                    _currentCommitType = CommitReason.UserInput;
+                                    GridInkCanvasSelectionCover.Visibility = Visibility.Collapsed;
+                                    newStrokes = new StrokeCollection();
                                 }
-
-                                //纠正垂直与水平关系
-                                var newPoints = FixPointsDirection(p[0], p[2]);
-                                p[0] = newPoints[0];
-                                p[2] = newPoints[1];
-                                newPoints = FixPointsDirection(p[1], p[3]);
-                                p[1] = newPoints[0];
-                                p[3] = newPoints[1];
-
-                                var pointList = GenerateEllipseGeometry(iniP, endP);
-                                var point = new StylusPointCollection(pointList);
-                                var stroke = new Stroke(point)
+                            }
+                            else if (result.InkDrawingNode.GetShapeName().Contains("Triangle"))
+                            {
+                                var shape = result.InkDrawingNode.GetShape();
+                                var p = result.InkDrawingNode.HotPoints;
+                                if ((Math.Max(Math.Max(p[0].X, p[1].X), p[2].X) - Math.Min(Math.Min(p[0].X, p[1].X), p[2].X) >= 100 ||
+                                    Math.Max(Math.Max(p[0].Y, p[1].Y), p[2].Y) - Math.Min(Math.Min(p[0].Y, p[1].Y), p[2].Y) >= 100) && result.InkDrawingNode.HotPoints.Count == 3)
                                 {
-                                    DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
-                                };
+                                    //纠正垂直与水平关系
+                                    var newPoints = FixPointsDirection(p[0], p[1]);
+                                    p[0] = newPoints[0];
+                                    p[1] = newPoints[1];
+                                    newPoints = FixPointsDirection(p[0], p[2]);
+                                    p[0] = newPoints[0];
+                                    p[2] = newPoints[1];
+                                    newPoints = FixPointsDirection(p[1], p[2]);
+                                    p[1] = newPoints[0];
+                                    p[2] = newPoints[1];
 
-                                if (needRotation)
-                                {
-                                    Matrix m = new Matrix();
-                                    FrameworkElement fe = e.Source as FrameworkElement;
-                                    double tanTheta = (p[2].Y - p[0].Y) / (p[2].X - p[0].X);
-                                    double theta = Math.Atan(tanTheta);
-                                    m.RotateAt(theta * 180.0 / Math.PI, result.Centroid.X, result.Centroid.Y);
-                                    stroke.Transform(m, false);
+                                    var pointList = p.ToList();
+                                    //pointList.Add(p[0]);
+                                    var point = new StylusPointCollection(pointList);
+                                    var stroke = new Stroke(GenerateFakePressureTriangle(point))
+                                    {
+                                        DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
+                                    };
+                                    SetNewBackupOfStroke();
+                                    _currentCommitType = CommitReason.ShapeRecognition;
+                                    inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
+                                    inkCanvas.Strokes.Add(stroke);
+                                    _currentCommitType = CommitReason.UserInput;
+                                    GridInkCanvasSelectionCover.Visibility = Visibility.Collapsed;
+                                    newStrokes = new StrokeCollection();
                                 }
-
-                                SetNewBackupOfStroke();
-                                inkCanvas.Strokes.Add(stroke);
-                                inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
-                                newStrokes = new StrokeCollection();
                             }
-                        }
-                        else if (result.InkDrawingNode.GetShapeName().Contains("Triangle"))
-                        {
-                            var shape = result.InkDrawingNode.GetShape();
-                            var p = result.InkDrawingNode.HotPoints;
-                            if ((Math.Max(Math.Max(p[0].X, p[1].X), p[2].X) - Math.Min(Math.Min(p[0].X, p[1].X), p[2].X) >= 100 ||
-                                Math.Max(Math.Max(p[0].Y, p[1].Y), p[2].Y) - Math.Min(Math.Min(p[0].Y, p[1].Y), p[2].Y) >= 100) && result.InkDrawingNode.HotPoints.Count == 3)
+                            else if (result.InkDrawingNode.GetShapeName().Contains("Rectangle") ||
+                                     result.InkDrawingNode.GetShapeName().Contains("Diamond") ||
+                                     result.InkDrawingNode.GetShapeName().Contains("Parallelogram") ||
+                                     result.InkDrawingNode.GetShapeName().Contains("Square"))
                             {
-                                //纠正垂直与水平关系
-                                var newPoints = FixPointsDirection(p[0], p[1]);
-                                p[0] = newPoints[0];
-                                p[1] = newPoints[1];
-                                newPoints = FixPointsDirection(p[0], p[2]);
-                                p[0] = newPoints[0];
-                                p[2] = newPoints[1];
-                                newPoints = FixPointsDirection(p[1], p[2]);
-                                p[1] = newPoints[0];
-                                p[2] = newPoints[1];
-
-                                var pointList = p.ToList();
-                                //pointList.Add(p[0]);
-                                var point = new StylusPointCollection(pointList);
-                                var stroke = new Stroke(GenerateFakePressureTriangle(point))
+                                var shape = result.InkDrawingNode.GetShape();
+                                var p = result.InkDrawingNode.HotPoints;
+                                if ((Math.Max(Math.Max(Math.Max(p[0].X, p[1].X), p[2].X), p[3].X) - Math.Min(Math.Min(Math.Min(p[0].X, p[1].X), p[2].X), p[3].X) >= 100 ||
+                                    Math.Max(Math.Max(Math.Max(p[0].Y, p[1].Y), p[2].Y), p[3].Y) - Math.Min(Math.Min(Math.Min(p[0].Y, p[1].Y), p[2].Y), p[3].Y) >= 100) && result.InkDrawingNode.HotPoints.Count == 4)
                                 {
-                                    DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
-                                };
-                                SetNewBackupOfStroke();
-                                inkCanvas.Strokes.Add(stroke);
-                                inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
-                                newStrokes = new StrokeCollection();
+                                    //纠正垂直与水平关系
+                                    var newPoints = FixPointsDirection(p[0], p[1]);
+                                    p[0] = newPoints[0];
+                                    p[1] = newPoints[1];
+                                    newPoints = FixPointsDirection(p[1], p[2]);
+                                    p[1] = newPoints[0];
+                                    p[2] = newPoints[1];
+                                    newPoints = FixPointsDirection(p[2], p[3]);
+                                    p[2] = newPoints[0];
+                                    p[3] = newPoints[1];
+                                    newPoints = FixPointsDirection(p[3], p[0]);
+                                    p[3] = newPoints[0];
+                                    p[0] = newPoints[1];
+
+                                    var pointList = p.ToList();
+                                    pointList.Add(p[0]);
+                                    var point = new StylusPointCollection(pointList);
+                                    var stroke = new Stroke(GenerateFakePressureRectangle(point))
+                                    {
+                                        DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
+                                    };
+                                    SetNewBackupOfStroke();
+                                    _currentCommitType = CommitReason.ShapeRecognition;
+                                    inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
+                                    inkCanvas.Strokes.Add(stroke);
+                                    _currentCommitType = CommitReason.UserInput;
+                                    GridInkCanvasSelectionCover.Visibility = Visibility.Collapsed;
+                                    newStrokes = new StrokeCollection();
+                                }
                             }
                         }
-                        else if (result.InkDrawingNode.GetShapeName().Contains("Rectangle") ||
-                                 result.InkDrawingNode.GetShapeName().Contains("Diamond") ||
-                                 result.InkDrawingNode.GetShapeName().Contains("Parallelogram") ||
-                                 result.InkDrawingNode.GetShapeName().Contains("Square"))
-                        {
-                            var shape = result.InkDrawingNode.GetShape();
-                            var p = result.InkDrawingNode.HotPoints;
-                            if ((Math.Max(Math.Max(Math.Max(p[0].X, p[1].X), p[2].X), p[3].X) - Math.Min(Math.Min(Math.Min(p[0].X, p[1].X), p[2].X), p[3].X) >= 100 ||
-                                Math.Max(Math.Max(Math.Max(p[0].Y, p[1].Y), p[2].Y), p[3].Y) - Math.Min(Math.Min(Math.Min(p[0].Y, p[1].Y), p[2].Y), p[3].Y) >= 100) && result.InkDrawingNode.HotPoints.Count == 4)
-                            {
-                                //纠正垂直与水平关系
-                                var newPoints = FixPointsDirection(p[0], p[1]);
-                                p[0] = newPoints[0];
-                                p[1] = newPoints[1];
-                                newPoints = FixPointsDirection(p[1], p[2]);
-                                p[1] = newPoints[0];
-                                p[2] = newPoints[1];
-                                newPoints = FixPointsDirection(p[2], p[3]);
-                                p[2] = newPoints[0];
-                                p[3] = newPoints[1];
-                                newPoints = FixPointsDirection(p[3], p[0]);
-                                p[3] = newPoints[0];
-                                p[0] = newPoints[1];
-
-                                var pointList = p.ToList();
-                                pointList.Add(p[0]);
-                                var point = new StylusPointCollection(pointList);
-                                var stroke = new Stroke(GenerateFakePressureRectangle(point))
-                                {
-                                    DrawingAttributes = inkCanvas.DefaultDrawingAttributes.Clone()
-                                };
-                                SetNewBackupOfStroke();
-                                inkCanvas.Strokes.Add(stroke);
-                                inkCanvas.Strokes.Remove(result.InkDrawingNode.Strokes);
-                                newStrokes = new StrokeCollection();
-                            }
-                        }
+                        catch { }
                     }
-                    catch { }
+                    InkToShapeProcess();
                 }
 
                 // 检查是否是压感笔书写
@@ -5234,12 +6361,6 @@ namespace Ink_Canvas
                 whiteboardIndex = 0;
             }
             strokeCollections[whiteboardIndex] = lastTouchDownStrokeCollection;
-
-            BtnUndo.IsEnabled = true;
-            BtnUndo.Visibility = Visibility.Visible;
-
-            BtnRedo.IsEnabled = false;
-            BtnRedo.Visibility = Visibility.Collapsed;
         }
 
         public double GetDistance(Point point1, Point point2)
@@ -5271,7 +6392,7 @@ namespace Ink_Canvas
                     p2.Y -= x;
                 }
             }
-            else if(Math.Abs(p1.Y - p2.Y) / Math.Abs(p1.X - p2.X) > 8)
+            else if (Math.Abs(p1.Y - p2.Y) / Math.Abs(p1.X - p2.X) > 8)
             {
                 //垂直
                 double x = Math.Abs(p1.X - p2.X) / 2;
@@ -5378,7 +6499,7 @@ namespace Ink_Canvas
                 myrp = (HttpWebResponse)ex.Response;
             }
 
-            if (myrp.StatusCode != HttpStatusCode.OK)
+            if (myrp?.StatusCode != HttpStatusCode.OK)
             {
                 return "null";
             }
@@ -5436,6 +6557,88 @@ namespace Ink_Canvas
         }
         #endregion
 
+        #region Auto Theme
+
+        Color FloatBarForegroundColor = Color.FromRgb(102, 102, 102);
+        private void SetTheme(string theme)
+        {
+            if (theme == "Light")
+            {
+                ResourceDictionary rd1 = new ResourceDictionary() { Source = new Uri("Resources/Styles/Light.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd1);
+
+                ResourceDictionary rd2 = new ResourceDictionary() { Source = new Uri("Resources/DrawShapeImageDictionary.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd2);
+
+                ResourceDictionary rd3 = new ResourceDictionary() { Source = new Uri("Resources/SeewoImageDictionary.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd3);
+
+                ResourceDictionary rd4 = new ResourceDictionary() { Source = new Uri("Resources/IconImageDictionary.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd4);
+
+                ThemeManager.SetRequestedTheme(window, ElementTheme.Light);
+
+                FloatBarForegroundColor = (Color)Application.Current.FindResource("FloatBarForegroundColor");
+            }
+            else if (theme == "Dark")
+            {
+                ResourceDictionary rd1 = new ResourceDictionary() { Source = new Uri("Resources/Styles/Dark.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd1);
+
+                ResourceDictionary rd2 = new ResourceDictionary() { Source = new Uri("Resources/DrawShapeImageDictionary.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd2);
+
+                ResourceDictionary rd3 = new ResourceDictionary() { Source = new Uri("Resources/SeewoImageDictionary.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd3);
+
+                ResourceDictionary rd4 = new ResourceDictionary() { Source = new Uri("Resources/IconImageDictionary.xaml", UriKind.Relative) };
+                Application.Current.Resources.MergedDictionaries.Add(rd4);
+
+                ThemeManager.SetRequestedTheme(window, ElementTheme.Dark);
+
+                FloatBarForegroundColor = (Color)Application.Current.FindResource("FloatBarForegroundColor");
+            }
+
+            SymbolIconSelect.Foreground = new SolidColorBrush(FloatBarForegroundColor);
+            SymbolIconDelete.Foreground = new SolidColorBrush(FloatBarForegroundColor);
+        }
+
+        private void SystemEvents_UserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+        {
+            switch (Settings.Appearance.Theme)
+            {
+                case 0:
+                    SetTheme("Light");
+                    break;
+                case 1:
+                    SetTheme("Dark");
+                    break;
+                case 2:
+                    if (IsSystemThemeLight()) SetTheme("Light");
+                    else SetTheme("Dark");
+                    break;
+            }
+        }
+
+        private bool IsSystemThemeLight()
+        {
+            bool light = false;
+            try
+            {
+                RegistryKey registryKey = Registry.CurrentUser;
+                RegistryKey themeKey = registryKey.OpenSubKey("software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+                int keyValue = 0;
+                if (themeKey != null)
+                {
+                    keyValue = (int)themeKey.GetValue("SystemUsesLightTheme");
+                }
+                if (keyValue == 1) light = true;
+            }
+            catch { }
+            return light;
+        }
+        #endregion
+
         #endregion Functions
 
         #region Screenshot
@@ -5447,33 +6650,17 @@ namespace Ink_Canvas
 
             GridNotifications.Visibility = Visibility.Collapsed;
 
-            new Thread(new ThreadStart(() => {
+            new Thread(new ThreadStart(() =>
+            {
                 Thread.Sleep(20);
                 try
                 {
                     Application.Current.Dispatcher.Invoke(() =>
                     {
-                        System.Drawing.Rectangle rc = System.Windows.Forms.SystemInformation.VirtualScreen;
-                        var bitmap = new System.Drawing.Bitmap(rc.Width, rc.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-
-                        using (System.Drawing.Graphics memoryGrahics = System.Drawing.Graphics.FromImage(bitmap))
-                        {
-                            memoryGrahics.CopyFromScreen(rc.X, rc.Y, 0, 0, rc.Size, System.Drawing.CopyPixelOperation.SourceCopy);
-                        }
-
-                        if (!Directory.Exists(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) + @"\Ink Canvas Screenshots"))
-                        {
-                            Directory.CreateDirectory(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) + @"\Ink Canvas Screenshots");
-                        }
-
-                        bitmap.Save(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) +
-                            @"\Ink Canvas Screenshots\" + DateTime.Now.ToString("u").Replace(':', '-') + ".png", ImageFormat.Png);
-
-                        if (!isHideNotification)
-                        {
-                            ShowNotification("截图成功保存至 " + Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) +
-                                @"\Ink Canvas Screenshots\" + DateTime.Now.ToString("u").Replace(':', '-') + ".png");
-                        }
+                        if (BtnPPTSlideShowEnd.Visibility == Visibility.Visible)
+                            SaveScreenShot(isHideNotification, $"{pptName}/{previousSlideID}_{DateTime.Now:HH-mm-ss}");
+                        else
+                            SaveScreenShot(isHideNotification);
                     });
                 }
                 catch
@@ -5488,7 +6675,7 @@ namespace Ink_Canvas
                 {
                     Application.Current.Dispatcher.Invoke(() =>
                     {
-                        if (inkCanvas.Visibility != Visibility.Visible || inkCanvas.Strokes.Count == 0) return;
+                        if (inkCanvas.Visibility != Visibility.Visible || inkCanvas.Strokes.Count == 0 || !Settings.Automation.IsAutoSaveStrokesAtScreenshot) return;
                         SaveInkCanvasStrokes(false);
                     });
                 }
@@ -5504,6 +6691,55 @@ namespace Ink_Canvas
             })).Start();
         }
 
+        private void SaveScreenShot(bool isHideNotification, string fileName = null)
+        {
+            var size = System.Windows.Forms.SystemInformation.PrimaryMonitorSize;
+            var rc = new System.Drawing.Rectangle(new System.Drawing.Point(0, 0), new System.Drawing.Size(size.Width, size.Height));
+            var bitmap = new System.Drawing.Bitmap(rc.Width, rc.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (System.Drawing.Graphics memoryGrahics = System.Drawing.Graphics.FromImage(bitmap))
+            {
+                memoryGrahics.CopyFromScreen(rc.X, rc.Y, 0, 0, rc.Size, System.Drawing.CopyPixelOperation.SourceCopy);
+            }
+
+            if (Settings.Automation.IsSaveScreenshotsInDateFolders)
+            {
+                if (string.IsNullOrWhiteSpace(fileName))
+                    fileName = DateTime.Now.ToString("HH-mm-ss");
+                var savePath =
+                    $@"{Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)}\Ink Canvas Screenshots\{DateTime.Now.Date:yyyyMMdd}\{fileName}.png";
+
+
+                if (!Directory.Exists(Path.GetDirectoryName(savePath)))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(savePath));
+                }
+
+                bitmap.Save(savePath, ImageFormat.Png);
+
+                if (!isHideNotification)
+                {
+                    ShowNotification("截图成功保存至 " + savePath);
+                }
+            }
+            else
+            {
+                if (!Directory.Exists(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) + @"\Ink Canvas Screenshots"))
+                {
+                    Directory.CreateDirectory(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) +
+                                              @"\Ink Canvas Screenshots");
+                }
+
+                bitmap.Save(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) +
+                            @"\Ink Canvas Screenshots\" + DateTime.Now.ToString("u").Replace(':', '-') + ".png", ImageFormat.Png);
+
+                if (!isHideNotification)
+                {
+                    ShowNotification("截图成功保存至 " + Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) +
+                                     @"\Ink Canvas Screenshots\" + DateTime.Now.ToString("u").Replace(':', '-') + ".png");
+                }
+            }
+        }
+
         #endregion
 
         #region Notification
@@ -5511,7 +6747,12 @@ namespace Ink_Canvas
         int lastNotificationShowTime = 0;
         int notificationShowTime = 2500;
 
-        private void ShowNotification(string notice, bool isShowImmediately = true)
+        public static void ShowNewMessage(string notice, bool isShowImmediately = true)
+        {
+            (Application.Current?.Windows.Cast<Window>().FirstOrDefault(window => window is MainWindow) as MainWindow)?.ShowNotification(notice, isShowImmediately);
+        }
+
+        public void ShowNotification(string notice, bool isShowImmediately = true)
         {
             lastNotificationShowTime = Environment.TickCount;
 
@@ -5519,7 +6760,8 @@ namespace Ink_Canvas
             //GridNotifications.Opacity = 1;
             TextBlockNotice.Text = notice;
 
-            new Thread(new ThreadStart(() => {
+            new Thread(new ThreadStart(() =>
+            {
                 Thread.Sleep(notificationShowTime + 200);
                 if (Environment.TickCount - lastNotificationShowTime >= notificationShowTime)
                 {
@@ -5569,13 +6811,13 @@ namespace Ink_Canvas
         private void BtnCountdownTimer_Click(object sender, RoutedEventArgs e)
         {
             StackPanelToolButtons.Visibility = Visibility.Collapsed;
-            new CountdownTimerWindow().ShowDialog();
+            new CountdownTimerWindow().Show();
         }
 
         private void BtnRand_Click(object sender, RoutedEventArgs e)
         {
             StackPanelToolButtons.Visibility = Visibility.Collapsed;
-            new RandWindow().ShowDialog();
+            new RandWindow().Show();
         }
 
         #endregion Tools
@@ -5587,6 +6829,7 @@ namespace Ink_Canvas
             BorderClearInDelete.Visibility = Visibility.Collapsed;
             BorderTools.Visibility = Visibility.Collapsed;
         }
+
 
         private void BorderPenColorBlack_MouseUp(object sender, MouseButtonEventArgs e)
         {
@@ -5638,7 +6881,7 @@ namespace Ink_Canvas
             HideSubPanels();
         }
 
-        private void SymbolIconCursor_Click(object sender, RoutedEventArgs e)
+        private async void SymbolIconCursor_Click(object sender, RoutedEventArgs e)
         {
             if (currentMode != 0)
             {
@@ -5652,17 +6895,13 @@ namespace Ink_Canvas
                 {
                     if (ViewboxFloatingBar.Margin == new Thickness((SystemParameters.PrimaryScreenWidth - ViewboxFloatingBar.ActualWidth) / 2, SystemParameters.PrimaryScreenHeight - 60, -2000, -200))
                     {
-                        new Thread(new ThreadStart(() =>
-                        {
-                            Thread.Sleep(100);
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                ViewboxFloatingBar.Margin = new Thickness((SystemParameters.PrimaryScreenWidth - ViewboxFloatingBar.ActualWidth) / 2, SystemParameters.PrimaryScreenHeight - 60, -2000, -200);
-                            });
-                        })).Start();
+                        await Task.Delay(100);
+                        ViewboxFloatingBar.Margin = new Thickness((SystemParameters.PrimaryScreenWidth - ViewboxFloatingBar.ActualWidth) / 2, SystemParameters.PrimaryScreenHeight - 60, -2000, -200);
                     }
                 }
             }
+
+            SetColors();
         }
 
         private void SymbolIconDelete_MouseUp(object sender, MouseButtonEventArgs e)
@@ -5675,14 +6914,14 @@ namespace Ink_Canvas
             }
             else if (inkCanvas.Strokes.Count > 0)
             {
-                if (Settings.Automation.IsAutoSaveStrokesAtClear)
+                if (Settings.Automation.IsAutoSaveStrokesAtClear && inkCanvas.Strokes.Count > Settings.Automation.MinimumAutomationStrokeNumber)
                 {
-                    BtnScreenshot_Click(true, null);
+                    if (BtnPPTSlideShowEnd.Visibility == Visibility.Visible)
+                        SaveScreenShot(true, $"{pptName}/{previousSlideID}_{DateTime.Now:HH-mm-ss}");
+                    else
+                        SaveScreenShot(true);
                 }
-                else
-                {
-                    BtnClear_Click(BtnClear, null);
-                }
+                BtnClear_Click(BtnClear, null);
             }
             else
             {
@@ -5703,12 +6942,13 @@ namespace Ink_Canvas
         {
             BtnSelect_Click(BtnSelect, null);
 
-            ViewboxBtnColorBlackContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorBlueContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorGreenContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorRedContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorYellowContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorWhiteContent.Visibility = Visibility.Collapsed;
+            ImageEraser.Visibility = Visibility.Visible;
+            ViewboxBtnColorBlackContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorBlueContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorGreenContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorRedContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorYellowContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorWhiteContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
 
             HideSubPanels();
         }
@@ -5744,12 +6984,18 @@ namespace Ink_Canvas
                         ViewboxFloatingBar.Margin = new Thickness((SystemParameters.PrimaryScreenWidth - ViewboxFloatingBar.ActualWidth) / 2, SystemParameters.PrimaryScreenHeight - 60, -2000, -200);
                     });
                 })).Start();
-                BorderPenColorWhite_MouseUp(BorderPenColorWhite, null);
+                if (Settings.Canvas.UsingWhiteboard)
+                {
+                    BorderPenColorBlack_MouseUp(BorderPenColorBlack, null);
+                }
+                else
+                {
+                    BorderPenColorWhite_MouseUp(BorderPenColorWhite, null);
+                }
             }
             else
             {
                 //关闭黑板
-
                 if (isInMultiTouchMode) BorderMultiTouchMode_MouseUp(null, null);
 
                 if (BtnPPTSlideShowEnd.Visibility == Visibility.Collapsed)
@@ -5773,28 +7019,28 @@ namespace Ink_Canvas
                 }
                 BorderPenColorRed_MouseUp(BorderPenColorRed, null);
             }
-
             BtnSwitch_Click(BtnSwitch, null);
 
+            BtnExit.Foreground = Brushes.White;
+            ThemeManager.Current.ApplicationTheme = ApplicationTheme.Dark;
+            SetColors();
+            SetColorByIndex();
             if (currentMode == 0 && inkCanvas.Strokes.Count == 0 && BtnPPTSlideShowEnd.Visibility != Visibility.Visible)
             {
                 BtnHideInkCanvas_Click(BtnHideInkCanvas, null);
             }
-
-            BtnExit.Foreground = Brushes.White;
-            ThemeManager.Current.ApplicationTheme = ApplicationTheme.Dark;
         }
 
         private void ImageEraser_MouseUp(object sender, MouseButtonEventArgs e)
         {
             BtnErase_Click(BtnErase, e);
 
-            ViewboxBtnColorBlackContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorBlueContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorGreenContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorRedContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorYellowContent.Visibility = Visibility.Collapsed;
-            ViewboxBtnColorWhiteContent.Visibility = Visibility.Collapsed;
+            ViewboxBtnColorBlackContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorBlueContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorGreenContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorRedContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorYellowContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
+            ViewboxBtnColorWhiteContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(ColorSwiftOpacityDurationOff)));
 
             HideSubPanels();
         }
@@ -5835,7 +7081,7 @@ namespace Ink_Canvas
             isStopInkReplay = false;
             InkCanvasForInkReplay.Strokes.Clear();
             StrokeCollection strokes = inkCanvas.Strokes.Clone();
-            if (inkCanvas.GetSelectedStrokes().Count!= 0)
+            if (inkCanvas.GetSelectedStrokes().Count != 0)
             {
                 strokes = inkCanvas.GetSelectedStrokes().Clone();
             }
@@ -5932,6 +7178,7 @@ namespace Ink_Canvas
             }
         }
 
+
         #region Drag
 
         bool isDragDropInEffect = false;
@@ -5989,27 +7236,42 @@ namespace Ink_Canvas
             downPos = e.GetPosition(null);
             GridForFloatingBarDraging.Visibility = Visibility.Visible;
 
-            SymbolIconEmoji.Symbol = ModernWpf.Controls.Symbol.Emoji;
+            SymbolIconEmoji.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Emoji;
         }
 
         void SymbolIconEmoji_MouseUp(object sender, MouseButtonEventArgs e)
         {
             isDragDropInEffect = false;
 
-            if (downPos.X == e.GetPosition(null).X && downPos.Y == e.GetPosition(null).Y)
+            if (e is null || (downPos.X == e.GetPosition(null).X && downPos.Y == e.GetPosition(null).Y))
             {
-                if (BorderFloatingBarMainControls.Visibility == Visibility.Visible)
-                {
-                    BorderFloatingBarMainControls.Visibility = Visibility.Collapsed;
-                }
-                else
-                {
-                    BorderFloatingBarMainControls.Visibility = Visibility.Visible;
-                }
+                SetBorderFloatingBarMainControlsVisibility(!borderFloatingBarMainControlsVisibility);
             }
 
             GridForFloatingBarDraging.Visibility = Visibility.Collapsed;
-            SymbolIconEmoji.Symbol = ModernWpf.Controls.Symbol.Emoji2;
+            SymbolIconEmoji.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Emoji2;
+        }
+
+        bool borderFloatingBarMainControlsVisibility = true;
+        void SetBorderFloatingBarMainControlsVisibility(bool isVisible, bool isAnimated = true)
+        {
+            borderFloatingBarMainControlsVisibility = isVisible;
+            if (!isVisible)
+            {
+                BorderFloatingBarMainControls.RenderTransform.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(isAnimated ? 100 : 0))
+                {
+                    EasingFunction = new PowerEase() { Power = 4, EasingMode = EasingMode.EaseOut },
+                });
+                BorderFloatingBarMainControls.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(isAnimated ? 100 : 0)));
+            }
+            else
+            {
+                BorderFloatingBarMainControls.RenderTransform.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(isAnimated ? 160 : 0))
+                {
+                    EasingFunction = new PowerEase() { Power = 4, EasingMode = EasingMode.EaseOut },
+                });
+                BorderFloatingBarMainControls.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(isAnimated ? 160 : 0)));
+            }
         }
 
         #endregion
@@ -6060,12 +7322,12 @@ namespace Ink_Canvas
 
                 if (newNotice)
                 {
-                    ShowNotification("墨迹成功保存至 " + Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) +
+                    ShowNotification("墨迹成功保存至 " + Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) +
                         @"\Ink Canvas Strokes\User Saved\" + DateTime.Now.ToString("u").Replace(':', '-') + ".icstk");
                 }
                 else
                 {
-                    AppendNotification("墨迹成功保存至 " + Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) +
+                    AppendNotification("墨迹成功保存至 " + Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) +
                         @"\Ink Canvas Strokes\User Saved\" + DateTime.Now.ToString("u").Replace(':', '-') + ".icstk");
                 }
             }
@@ -6073,6 +7335,13 @@ namespace Ink_Canvas
             {
                 ShowNotification("墨迹保存失败");
             }
+        }
+
+        private void SymbolIconPin_MouseUp(object sender, MouseButtonEventArgs e)
+        {
+            _lockSmith = !_lockSmith;
+            if (_lockSmith) LockSmithSymbol.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.UnPin;
+            else LockSmithSymbol.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Pin;
         }
 
         private void SymbolIconOpenStrokes_MouseUp(object sender, MouseButtonEventArgs e)
@@ -6093,16 +7362,30 @@ namespace Ink_Canvas
                 LogHelper.WriteLogToFile(string.Format("Strokes Insert: Name: {0}", openFileDialog.FileName), LogHelper.LogType.Event);
                 try
                 {
-                    var fs = new FileStream(openFileDialog.FileName, FileMode.Open, FileAccess.Read);
-                    inkCanvas.Strokes = new StrokeCollection(fs);
-                    LogHelper.NewLog(string.Format("Strokes Insert: Strokes Count: {0}", inkCanvas.Strokes.Count.ToString()));
-                    if (inkCanvas.Strokes.Count == 0)
+                    var fileStreamHasNoStroke = false;
+                    using (var fs = new FileStream(openFileDialog.FileName, FileMode.Open, FileAccess.Read))
                     {
-                        fs.Close();
-                        var memoryStream = new MemoryStream(File.ReadAllBytes(openFileDialog.FileName));
-                        memoryStream.Position = 0;
-                        inkCanvas.Strokes = new StrokeCollection(memoryStream);
-                        LogHelper.NewLog(string.Format("Strokes Insert (2): Strokes Count: {0}", inkCanvas.Strokes.Count.ToString()));
+                        var strokes = new StrokeCollection(fs);
+                        fileStreamHasNoStroke = strokes.Count == 0;
+                        if (!fileStreamHasNoStroke)
+                        {
+                            ClearStrokes(true);
+                            timeMachine.ClearStrokeHistory();
+                            inkCanvas.Strokes.Add(strokes);
+                            LogHelper.NewLog(string.Format("Strokes Insert: Strokes Count: {0}", inkCanvas.Strokes.Count.ToString()));
+                        }
+                    }
+                    if (fileStreamHasNoStroke)
+                    {
+                        using (var ms = new MemoryStream(File.ReadAllBytes(openFileDialog.FileName)))
+                        {
+                            ms.Seek(0, SeekOrigin.Begin);
+                            var strokes = new StrokeCollection(ms);
+                            ClearStrokes(true);
+                            timeMachine.ClearStrokeHistory();
+                            inkCanvas.Strokes.Add(strokes);
+                            LogHelper.NewLog(string.Format("Strokes Insert (2): Strokes Count: {0}", strokes.Count.ToString()));
+                        }
                     }
 
                     if (inkCanvas.Visibility != Visibility.Visible)
@@ -6117,12 +7400,15 @@ namespace Ink_Canvas
             }
         }
 
+
+
         #endregion
 
         #region Multi-finger Inking
 
 
         #endregion
+
     }
 
     #region Test for pen

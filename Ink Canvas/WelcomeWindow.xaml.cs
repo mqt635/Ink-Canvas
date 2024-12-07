@@ -1,19 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 
 namespace Ink_Canvas
 {
@@ -74,7 +62,11 @@ namespace Ink_Canvas
             catch { }
 
             str = (str + "\n" + Assembly.GetExecutingAssembly().GetName().Version.ToString() + "\n" + "NewWelcomeConfigured").Trim();
-            File.WriteAllText("versions.ini", str);
+            try
+            {
+                File.WriteAllText("versions.ini", str);
+            }
+            catch { }
             Process.Start(System.Windows.Forms.Application.ExecutablePath);
 
             MainWindow.CloseIsFromButton = true;

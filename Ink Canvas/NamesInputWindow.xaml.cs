@@ -1,17 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.IO;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 
 namespace Ink_Canvas
 {
@@ -29,9 +17,9 @@ namespace Ink_Canvas
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            if (File.Exists(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + "Names.txt"))
+            if (File.Exists(App.RootPath + "Names.txt"))
             {
-                TextBoxNames.Text = File.ReadAllText(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + "Names.txt");
+                TextBoxNames.Text = File.ReadAllText(App.RootPath + "Names.txt");
                 originText = TextBoxNames.Text;
             }
         }
@@ -43,7 +31,7 @@ namespace Ink_Canvas
                 var result = MessageBox.Show("是否保存？", "名单导入", MessageBoxButton.YesNo);
                 if (result == MessageBoxResult.Yes)
                 {
-                    File.WriteAllText(System.AppDomain.CurrentDomain.SetupInformation.ApplicationBase + "Names.txt", TextBoxNames.Text);
+                    File.WriteAllText(App.RootPath + "Names.txt", TextBoxNames.Text);
                 }
             }
         }

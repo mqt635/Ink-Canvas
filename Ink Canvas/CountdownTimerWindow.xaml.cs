@@ -1,18 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Media;
+using System.Timers;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
-using System.Timers;
-using System.Media;
 
 namespace Ink_Canvas
 {
@@ -36,6 +27,7 @@ namespace Ink_Canvas
                 timer.Stop();
                 return;
             }
+
             TimeSpan timeSpan = DateTime.Now - startTime;
             TimeSpan totalTimeSpan = new TimeSpan(hour, minute, second);
             TimeSpan leftTimeSpan = totalTimeSpan - timeSpan;
@@ -47,6 +39,7 @@ namespace Ink_Canvas
                 TextBlockHour.Text = leftTimeSpan.Hours.ToString("00");
                 TextBlockMinute.Text = leftTimeSpan.Minutes.ToString("00");
                 TextBlockSecond.Text = leftTimeSpan.Seconds.ToString("00");
+                TbCurrentTime.Text = leftTimeSpan.ToString(@"hh\:mm\:ss");
                 if (spentTimePercent >= 1)
                 {
                     ProcessBarTime.CurrentValue = 0;
@@ -55,7 +48,7 @@ namespace Ink_Canvas
                     TextBlockSecond.Text = "00";
                     timer.Stop();
                     isTimerRunning = false;
-                    SymbolIconStart.Symbol = ModernWpf.Controls.Symbol.Play;
+                    SymbolIconStart.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Play;
                     BtnStartCover.Visibility = Visibility.Visible;
                     TextBlockHour.Foreground = new SolidColorBrush(StringToColor("#FF5B5D5F"));
                     BorderStopTime.Visibility = Visibility.Collapsed;
@@ -206,12 +199,12 @@ namespace Ink_Canvas
             if (WindowState == WindowState.Normal)
             {
                 WindowState = WindowState.Maximized;
-                SymbolIconFullscreen.Symbol = ModernWpf.Controls.Symbol.BackToWindow;
+                SymbolIconFullscreen.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.BackToWindow;
             }
             else
             {
                 WindowState = WindowState.Normal;
-                SymbolIconFullscreen.Symbol = ModernWpf.Controls.Symbol.FullScreen;
+                SymbolIconFullscreen.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.FullScreen;
             }
         }
 
@@ -237,7 +230,7 @@ namespace Ink_Canvas
                 BtnStartCover.Visibility = Visibility.Collapsed;
                 BorderStopTime.Visibility = Visibility.Collapsed;
                 TextBlockHour.Foreground = new SolidColorBrush(StringToColor("#FF5B5D5F"));
-                SymbolIconStart.Symbol = ModernWpf.Controls.Symbol.Play;
+                SymbolIconStart.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Play;
                 isTimerRunning = false;
                 timer.Stop();
                 isPaused = false;
@@ -269,7 +262,8 @@ namespace Ink_Canvas
                 Byte b2 = toByte(charArray[1]);
                 argb[i] = (Byte)(b2 | (b1 << 4));
             }
-            return Color.FromArgb(argb[0], argb[1], argb[2], argb[3]);//#FFFFFFFF
+
+            return Color.FromArgb(argb[0], argb[1], argb[2], argb[3]); //#FFFFFFFF
         }
 
         private static byte toByte(char c)
@@ -286,7 +280,7 @@ namespace Ink_Canvas
                 startTime += DateTime.Now - pauseTime;
                 ProcessBarTime.IsPaused = false;
                 TextBlockHour.Foreground = Brushes.Black;
-                SymbolIconStart.Symbol = ModernWpf.Controls.Symbol.Pause;
+                SymbolIconStart.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Pause;
                 isPaused = false;
                 timer.Start();
                 UpdateStopTime();
@@ -298,7 +292,7 @@ namespace Ink_Canvas
                 pauseTime = DateTime.Now;
                 ProcessBarTime.IsPaused = true;
                 TextBlockHour.Foreground = new SolidColorBrush(StringToColor("#FF5B5D5F"));
-                SymbolIconStart.Symbol = ModernWpf.Controls.Symbol.Play;
+                SymbolIconStart.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Play;
                 BorderStopTime.Visibility = Visibility.Collapsed;
                 isPaused = true;
                 timer.Stop();
@@ -310,7 +304,7 @@ namespace Ink_Canvas
                 totalSeconds = ((hour * 60) + minute) * 60 + second;
                 ProcessBarTime.IsPaused = false;
                 TextBlockHour.Foreground = Brushes.Black;
-                SymbolIconStart.Symbol = ModernWpf.Controls.Symbol.Pause;
+                SymbolIconStart.Symbol = iNKORE.UI.WPF.Modern.Controls.Symbol.Pause;
                 BtnResetCover.Visibility = Visibility.Collapsed;
 
                 if (totalSeconds <= 10)
@@ -346,6 +340,41 @@ namespace Ink_Canvas
         private void BtnClose_MouseUp(object sender, MouseButtonEventArgs e)
         {
             Close();
+        }
+
+        private bool _isInCompact = false;
+
+        private void BtnMinimal_OnMouseUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isInCompact)
+            {
+                Width = 1100;
+                Height = 700;
+                BigViewController.Visibility = Visibility.Visible;
+                TbCurrentTime.Visibility = Visibility.Collapsed;
+
+                // Set to center
+                double screenWidth = System.Windows.SystemParameters.PrimaryScreenWidth;
+                double screenHeight = System.Windows.SystemParameters.PrimaryScreenHeight;
+                Left = (screenWidth / 2) - (Width / 2);
+                Top = (screenHeight / 2) - (Height / 2);
+            }
+            else
+            {
+                if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
+                Width = 400;
+                Height = 250;
+                BigViewController.Visibility = Visibility.Collapsed;
+                TbCurrentTime.Visibility = Visibility.Visible;
+            }
+
+            _isInCompact = !_isInCompact;
+        }
+
+        private void WindowDragMove(object sender, MouseEventArgs e)
+        {
+            if (e.LeftButton == MouseButtonState.Pressed)
+                DragMove();
         }
     }
 }

@@ -1,12 +1,11 @@
-﻿using Ink_Canvas.Helpers;
+﻿using AutoUpdaterDotNET;
+using Ink_Canvas.Helpers;
+using iNKORE.UI.WPF.Modern.Controls;
 using System;
-using System.Collections.Generic;
-using System.Configuration;
-using System.Data;
 using System.Linq;
 using System.Reflection;
-using System.Threading.Tasks;
 using System.Windows;
+using MessageBox = System.Windows.MessageBox;
 
 namespace Ink_Canvas
 {
@@ -18,15 +17,24 @@ namespace Ink_Canvas
         System.Threading.Mutex mutex;
 
         public static string[] StartArgs = null;
+        public static string RootPath = Environment.GetEnvironmentVariable("APPDATA") + "\\Ink Canvas\\";
 
         public App()
         {
             this.Startup += new StartupEventHandler(App_Startup);
+            this.DispatcherUnhandledException += App_DispatcherUnhandledException;
+        }
+
+        private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+        {
+            Ink_Canvas.MainWindow.ShowNewMessage("抱歉，出现未预期的异常，可能导致 Ink Canvas 画板运行不稳定。\n建议保存墨迹后重启应用。", true);
+            LogHelper.NewLog(e.Exception.ToString());
+            e.Handled = true;
         }
 
         void App_Startup(object sender, StartupEventArgs e)
         {
-            LogHelper.LogFile = AppDomain.CurrentDomain.SetupInformation.ApplicationBase + LogHelper.LogFileName;
+            if (!StoreHelper.IsStoreApp) RootPath = AppDomain.CurrentDomain.SetupInformation.ApplicationBase;
 
             LogHelper.NewLog(string.Format("Ink Canvas Starting (Version: {0})", Assembly.GetExecutingAssembly().GetName().Version.ToString()));
 
@@ -42,6 +50,37 @@ namespace Ink_Canvas
             }
 
             StartArgs = e.Args;
+
+            if (!StoreHelper.IsStoreApp)
+            {
+                AutoUpdater.Start($"http://ink.wxriw.cn:1957/update");
+                AutoUpdater.ApplicationExitEvent += () =>
+                {
+                    Environment.Exit(0);
+                };
+            }
+        }
+
+        private void ScrollViewer_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        {
+            try
+            {
+                if (System.Windows.Forms.SystemInformation.MouseWheelScrollLines == -1)
+                    e.Handled = false;
+                else
+                    try
+                    {
+                        ScrollViewerEx SenderScrollViewer = (ScrollViewerEx)sender;
+                        SenderScrollViewer.ScrollToVerticalOffset(SenderScrollViewer.VerticalOffset - e.Delta * 10 * System.Windows.Forms.SystemInformation.MouseWheelScrollLines / (double)120);
+                        e.Handled = true;
+                    }
+                    catch
+                    {
+                    }
+            }
+            catch
+            {
+            }
         }
     }
 }
